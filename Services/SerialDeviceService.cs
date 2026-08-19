@@ -212,13 +212,14 @@ public sealed class SerialDeviceService : IDisposable
                 _readTask = Task.Run(() => ReadLoopAsync(portObj, _readCts.Token));
 
                 _streamEnabled = false;
-                _logger.LogInformation("Connected to {Port}. Enabling stream...", port);
+                _logger.LogInformation("Connected to {Port}. Running startup sequence: version probe → config refresh → stream enable.", port);
                 UpdateConnectionState();
 
-                // Ask firmware to start the telemetry stream, then pull the
-                // current configuration via PACED GET requests (one at a time,
-                // each awaiting its reply), then probe the binary link.
-                EnableStream(true);
+                // Startup order: 1) GET_VERSION probe first to confirm the binary
+                // link is alive, 2) pull configuration via PACED GET requests
+                // (retry the whole set if any reply is lost), 3) only at the very
+                // end enable the telemetry stream so firmware is idle during the
+                // queries and every reply is the direct answer to a request.
                 _ = RunStartupSequenceAsync();
                 return;
             }
@@ -472,11 +473,13 @@ public sealed class SerialDeviceService : IDisposable
     /// Ask the firmware for a fresh copy of every setting. Requests are PACED:
     /// each GET is sent only after the previous reply arrived, so the USB CDC
     /// RX buffer never has to hold a multi-packet burst.
+    /// Returns true when every GET was answered.
     /// </summary>
     public void RefreshConfiguration() => _ = RefreshConfigurationAsync();
 
-    private async Task RefreshConfigurationAsync()
+    private async Task<bool> RefreshConfigurationAsync()
     {
+        bool allOk = true;
         foreach (var opcode in ConfigGetOpcodeOrder)
         {
             if (_disposed)
@@ -496,14 +499,16 @@ public sealed class SerialDeviceService : IDisposable
             {
                 lock (_pendingLock) { _pendingGets.Remove(opcode); }
                 _logger.LogWarning("GET 0x{Opcode:X4}: no reply within 500 ms — skipping.", opcode);
+                allOk = false;
             }
         }
+        return allOk;
     }
 
-    /// <summary>Send a GET_VERSION probe and log whether the firmware replies.</summary>
+    /// <summary>Send a GET_VERSION probe. Returns true when the firmware replied.</summary>
     public void ProbeFirmware() => _ = ProbeFirmwareAsync();
 
-    private async Task ProbeFirmwareAsync()
+    private async Task<bool> ProbeFirmwareAsync()
     {
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_pendingLock) { _pendingGets[Opcode.GET_VERSION] = tcs; }
@@ -512,11 +517,13 @@ public sealed class SerialDeviceService : IDisposable
         try
         {
             await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            return true;
         }
         catch (TimeoutException)
         {
             lock (_pendingLock) { _pendingGets.Remove(Opcode.GET_VERSION); }
             _logger.LogWarning("GET_VERSION: no reply within 3000 ms — firmware did not respond on the binary link.");
+            return false;
         }
     }
 
@@ -533,11 +540,52 @@ public sealed class SerialDeviceService : IDisposable
         }
     }
 
-    /// <summary>Run the connect-time query sequence: config refresh, then version probe.</summary>
+    /// <summary>
+    /// Connect-time startup sequence, in this order:
+    ///   1. GET_VERSION probe — confirms the binary link is alive.
+    ///   2. PACED config refresh — retried from scratch if any GET reply is lost.
+    ///   3. Enable telemetry stream — last, only after config is complete.
+    /// </summary>
     private async Task RunStartupSequenceAsync()
     {
-        await RefreshConfigurationAsync().ConfigureAwait(false);
-        await ProbeFirmwareAsync().ConfigureAwait(false);
+        try
+        {
+            // 1) Version probe first. If the firmware never answers, the link is
+            //    not usable — do not request config or start the stream.
+            if (!await ProbeFirmwareAsync().ConfigureAwait(false))
+            {
+                _logger.LogWarning("Startup aborted: firmware did not answer GET_VERSION.");
+                return;
+            }
+
+            // 2) Config refresh with full retry when a reply is lost.
+            const int maxAttempts = 3;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                if (await RefreshConfigurationAsync().ConfigureAwait(false))
+                {
+                    break;
+                }
+                if (attempt < maxAttempts)
+                {
+                    _logger.LogWarning("Startup: some config GETs were lost (attempt {Attempt}/{Max}) — refreshing again.", attempt, maxAttempts);
+                }
+                else
+                {
+                    _logger.LogWarning("Startup: config refresh still incomplete after {Max} attempts — continuing with partial config.", maxAttempts);
+                }
+            }
+
+            // 3) Telemetry stream — last, so firmware stays idle during the queries.
+            if (!_disposed)
+            {
+                EnableStream(true);
+            }
+        }
+        catch (Exception ex) when (!_disposed)
+        {
+            _logger.LogWarning("Startup sequence failed: {Message}", ex.Message);
+        }
     }
 
     /// <summary>Send a raw binary packet on the serial port.</summary>

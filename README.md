@@ -2,7 +2,9 @@
 
 Web-based data-acquisition and control UI for the **DPLL ultrasonic frequency-tracking** firmware running on an STM32F407 (see `D:\National Seismic Instrument\Release\Firmware\Source\DPLL_Ultrasonic_Frequency_Tracking`).
 
-The application exposes a browser dashboard over **SignalR (WebSocket)** that shows live DPLL telemetry (reference frequency, phase error, DAC voltage, lock state), plots real-time trend charts, and lets you tune the digital PLL loop (Kp / Ki / Kd, center voltage, target phase, slew rate, loop period, signal-loss behavior) plus drive the DAC manually.
+The application exposes a browser dashboard over **SignalR (WebSocket)** that shows live DPLL telemetry (reference frequency, phase error, DAC voltage, lock state), plots real-time trend charts, lets you tune the digital PLL loop (Kp / Ki / Kd, center voltage, target phase, slew rate, loop period, signal-loss behavior) plus drive the DAC manually, and records telemetry samples to CSV files for post-analysis.
+
+> **100% offline.** All client libraries (ECharts, Inter font, SignalR) are vendored locally under `wwwroot/` — the dashboard works without internet access.
 
 > **Architecture note — one binary serial interface.** The firmware exposes a single USB CDC serial port (`SerialUSB`) that carries **only binary opcode packets**:
 >
@@ -119,11 +121,43 @@ GET responses (firmware→host) mirror the same payloads; the app folds them int
 ## Web UI
 
 - **Live Status** — frequency (Hz), phase error (ns), DAC voltage (V), loop period, lock badge (NO REF / WAIT ZCD / TRACK / LOCK), stale-phase and manual-mode flags.
-- **Trends** — three scrolling Chart.js line charts (300 points each ≈ 3 s at 100 Hz), live sample-rate chip, pause/clear.
+- **Trends** — three scrolling ECharts line charts (600 points each ≈ 6 s at 100 Hz, LTTB downsampled), live sample-rate chip, pause/clear, plus **Start logging / Stop logging** buttons that record raw telemetry to CSV.
 - **Controller** — edit Kp/Ki/Kd/center/target/slew/loop/lock threshold/lock hold cycles/lock memory timeout/stream period/signal-loss behavior, **Apply configuration**, **Reset loop**, **Run loop**, **Shutdown (0 V)**, plus a manual DAC slider.
 - **Event Log** — timestamped INFO/OK/WARN/ERROR/DATA entries (capped at 500 lines).
 
-The SignalR client bundle is vendored locally at `wwwroot/js/signalr.min.js` (`@microsoft/signalr` 8.0.7), so the app needs no CDN except Chart.js.
+### CSV data logger
+
+Clicking **Start logging** in the Trends panel creates `data/<yyyyMMdd_HHmmss>.csv` next to the executable (`bin/Debug/net10.0/data/` when running `dotnet run`, `App/data/` in the published folder) and appends **every** telemetry frame while active. The chip in the Trends header shows the live row count; **Stop logging** closes the file and shows its path in the event log.
+
+CSV columns:
+
+| Column | Meaning |
+|---|---|
+| `Timestamp_ms` | Host-clock Unix epoch milliseconds (UTC) when the sample arrived |
+| `ReferenceFrequencyHz` | Reference frequency (Hz) |
+| `PhaseErrorNs` | Phase error (ns) |
+| `DACVoltage_V` | DAC output (V) |
+| `LockStatus` | 0=NO_REF, 1=WAIT_ZCD, 2=TRACK, 3=LOCK |
+| `LockState` | Human-readable lock state |
+| `PhaseStale` | 1 when ZCD/REF absent (holding last value) |
+| `IsLocked` | 1 when locked |
+
+The file is written with `AutoFlush` — safe to copy/read while recording. Logging is a singleton server-side service (`CsvLoggerService`), so a session survives browser refreshes.
+
+---
+
+## Client assets (offline)
+
+All browser dependencies are served from `wwwroot/` — no CDN, no Google Fonts:
+
+| Asset | Location | Version |
+|---|---|---|
+| ECharts | `wwwroot/assets/libs/echart/echarts.min.js` | 6.0.0 |
+| Inter font | `wwwroot/assets/fonts/inter2/inter2.css` (+ woff2) | 400–700 |
+| SignalR client | `wwwroot/js/signalr.js` / `signalr.min.js` | `@microsoft/signalr` 8.0.7 |
+| App code | `wwwroot/js/app.js`, `wwwroot/css/site.css` | — |
+
+`Program.cs` also sets `Cache-Control: no-store` on every static response so a browser refresh always picks up the latest UI files.
 
 ---
 
@@ -143,13 +177,15 @@ Protocol/
   DpllProtocol.cs               # Packet build/parse, checksum, opcodes, status decode
 Services/
   SerialDeviceService.cs        # Single-port manager (binary opcode traffic)
+  CsvLoggerService.cs           # Background CSV telemetry logger (Start/Stop/Log)
 Hubs/
   DpllHub.cs                    # SignalR hub: /hubs/dpll
 wwwroot/
   index.html                    # Dashboard
   css/site.css
-  js/app.js                     # SignalR client + charts + controls
+  js/app.js                     # SignalR client + ECharts + controls
   js/signalr.min.js             # Vendored @microsoft/signalr 8.0.7
+  assets/                       # Offline client libs (ECharts, Inter font)
 ```
 
 ## SignalR hub (`/hubs/dpll`)
@@ -161,6 +197,9 @@ wwwroot/
 | `RefreshConfiguration()` | Request a config snapshot via binary GET opcodes |
 | `ResetLoop()` / `RunLoop()` / `ShutdownLoop()` | Binary `RESET_LOOP` / `SET_ENABLE_LOOP` / `SHUTDOWN_LOOP` |
 | `SetManualVoltage(v)` | Binary `SET_VOLTAGE` (`0x0014`) |
+| `StartLogging()` | Begin CSV recording; returns the created file path |
+| `StopLogging()` | Stop CSV recording; returns the closed file path |
+| `GetLoggingStatus()` | Current logging state (active, file, row count, started at) |
 
 Events (server→client): `Telemetry` (100 Hz), `Configuration`, `ConnectionState(code, port)`. Connection is managed entirely server-side from `serial.json` — the UI never opens/closes ports.
 

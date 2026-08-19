@@ -17,6 +17,8 @@ const state = {
   sampleWindowStart: performance.now(),
   sampleWindowCount: 0,
   charts: null,
+  logging: false,
+  logStartSample: 0,
 };
 
 // ---------------- Chart config ----------------
@@ -56,6 +58,9 @@ const els = {
   sampleRateChip: $('sampleRateChip'),
   pauseBtn: $('pauseBtn'),
   clearBtn: $('clearBtn'),
+  logChip: $('logChip'),
+  startLogBtn: $('startLogBtn'),
+  stopLogBtn: $('stopLogBtn'),
   refreshCfgBtn: $('refreshCfgBtn'),
   applyCfgBtn: $('applyCfgBtn'),
   kpInput: $('kpInput'),
@@ -141,6 +146,10 @@ function onTelemetry(t) {
   state.sampleCount++;
   state.sampleWindowCount++;
 
+  // Live row counter while CSV logging is active (local sample delta).
+  if (state.logging && state.sampleCount % 10 === 0) {
+    els.logChip.textContent = `● ${els.logChip.dataset.fname || ''} · ${state.sampleCount - state.logStartSample} rows`;
+  }
   if (state.sampleCount % 10 === 0) {
     const now = performance.now();
     const elapsed = (now - state.sampleWindowStart) / 1000;
@@ -489,6 +498,49 @@ els.pauseBtn.addEventListener('click', () => {
 });
 els.clearBtn.addEventListener('click', clearCharts);
 els.clearLogBtn.addEventListener('click', () => { els.log.innerHTML = ''; });
+
+// ---------------- Logging control ----------------
+function setLoggingUi(active, file, rows) {
+  els.startLogBtn.hidden = active;
+  els.stopLogBtn.hidden = !active;
+  els.logChip.hidden = !active;
+  if (active) {
+    const fname = file ? file.split(/[\\/]/).pop() : '';
+    els.logChip.textContent = `● ${fname} · ${rows ?? 0} rows`;
+  }
+}
+
+async function onStartLogging() {
+  if (state.logging) return;
+  if (!state.connected) { log('warn', 'Not connected — cannot start logging'); return; }
+  const file = await call('StartLogging');
+  if (file) {
+    state.logging = true;
+    state.logStartSample = state.sampleCount;
+    els.logChip.dataset.fname = file.split(/[\\/]/).pop() || '';
+    setLoggingUi(true, file, 0);
+    log('ok', `CSV logging started → ${file}`);
+  } else {
+    log('warn', 'Could not start logging (no connection or already active)');
+  }
+}
+
+async function onStopLogging() {
+  if (!state.logging) return;
+  const file = await call('StopLogging');
+  if (file) {
+    state.logging = false;
+    setLoggingUi(false, null, 0);
+    log('ok', `CSV logging stopped → ${file}`);
+  } else {
+    state.logging = false;
+    setLoggingUi(false, null, 0);
+    log('warn', 'No active logging session');
+  }
+}
+
+els.startLogBtn.addEventListener('click', onStartLogging);
+els.stopLogBtn.addEventListener('click', onStopLogging);
 
 // ---------------- Boot ----------------
 initCharts();

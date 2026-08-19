@@ -12,11 +12,42 @@ namespace DPLL_Ultrasonic_DAQ.Hubs;
 public class DpllHub : Hub
 {
     private readonly SerialDeviceService _device;
+    private readonly CsvLoggerService _logger;
 
-    public DpllHub(SerialDeviceService device)
+    public DpllHub(SerialDeviceService device, CsvLoggerService logger)
     {
         _device = device;
+        _logger = logger;
     }
+
+    /// <summary>
+    /// Begin CSV logging. Returns the absolute path of the created file, or
+    /// null if a recording is already in progress.
+    /// </summary>
+    public string? StartLogging()
+    {
+        if (_device.State != DeviceConnectionState.Connected) return null;
+        return _logger.Start() ? _logger.FilePath : null;
+    }
+
+    /// <summary>
+    /// Stop CSV logging. Returns the absolute path of the closed file, or
+    /// null if no recording was active.
+    /// </summary>
+    public string? StopLogging()
+    {
+        var path = _logger.Stop();
+        return path;
+    }
+
+    /// <summary>Current logging state (active flag, file path, row count).</summary>
+    public object GetLoggingStatus() => new
+    {
+        Active = _logger.IsLogging,
+        File = _logger.FilePath,
+        Rows = _logger.RowCount,
+        StartedAt = _logger.StartedAt.ToString("O")
+    };
 
     public override Task OnConnectedAsync()
     {

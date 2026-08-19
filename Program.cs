@@ -13,6 +13,7 @@ builder.Services.Configure<SerialOptions>(builder.Configuration.GetSection(Seria
 
 // --- Services ---
 builder.Services.AddSingleton<SerialDeviceService>();
+builder.Services.AddSingleton<CsvLoggerService>();
 builder.Services.AddSignalR().AddJsonProtocol(options =>
 {
     // The JS client reads PascalCase property names (cfg.Kp, t.ReferenceFrequencyHz).
@@ -41,12 +42,17 @@ app.MapHub<DpllHub>("/hubs/dpll");
 // --- Auto-connect to the ports configured in serial.json ---
 var device = app.Services.GetRequiredService<SerialDeviceService>();
 var hubContext = app.Services.GetRequiredService<IHubContext<DpllHub>>();
+var logger = app.Services.GetRequiredService<CsvLoggerService>();
 
 app.Lifetime.ApplicationStarted.Register(() =>
 {
     // Broadcast every telemetry frame to all connected SignalR clients.
     device.TelemetryReceived += telemetry =>
+    {
+        // Persist the sample while a CSV logging session is active.
+        logger.LogTelemetry(telemetry);
         hubContext.Clients.All.SendAsync("Telemetry", telemetry);
+    };
 
     // Broadcast config snapshots (e.g. after a GET refresh).
     device.ConfigurationReceived += config =>

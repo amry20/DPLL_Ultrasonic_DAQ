@@ -4,9 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DPLL Ultrasonic Frequency Tracking — DAQ</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <!-- Font Inter (offline, dari assets) -->
+  <link rel="stylesheet" href="assets/fonts/inter2/inter2.css" />
   <link rel="stylesheet" href="css/site.css" />
 </head>
 <body>
@@ -79,6 +78,9 @@
           <span class="chip" id="sampleRateChip">0 Hz</span>
           <button id="pauseBtn" class="btn btn-ghost">Pause</button>
           <button id="clearBtn" class="btn btn-ghost">Clear</button>
+          <span class="log-chip" id="logChip" hidden></span>
+          <button id="startLogBtn" class="btn btn-success" disabled>Start logging</button>
+          <button id="stopLogBtn" class="btn btn-danger" hidden>Stop logging</button>
         </div>
       </div>
       <div class="charts-grid">
@@ -195,8 +197,8 @@
     <span>Serial protocol: binary opcodes + ASCII debug · Stream @ ~100 Hz</span>
   </footer>
 
-  <!-- ECharts (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <!-- ECharts (offline, dari assets) -->
+  <script src="assets/libs/echart/echarts.min.js"></script>
   <!-- SignalR JS client (local bundle, see README for update instructions) -->
   <script src="js/signalr.js"></script>
   <script src="js/app.js"></script>

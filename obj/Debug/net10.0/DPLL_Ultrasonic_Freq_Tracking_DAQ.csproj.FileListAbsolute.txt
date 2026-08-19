@@ -52,6 +52,6 @@ D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\ne
 D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\net10.0\DPLL_Ultrasonic_Freq_Tracking_DAQ.genruntimeconfig.cache
 D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\net10.0\ref\DPLL_Ultrasonic_Freq_Tracking_DAQ.dll
 D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\bin\Debug\net10.0\serial.json
-D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\net10.0\compressed\ydzrgb7af6-{0}-xrh0jsdwpi-xrh0jsdwpi.gz
-D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\net10.0\compressed\l89ix78vu2-{0}-rcjyaqu3ai-rcjyaqu3ai.gz
-D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\net10.0\compressed\0xz7o5mvtf-{0}-n5q49d3lo9-n5q49d3lo9.gz
+D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\net10.0\compressed\ydzrgb7af6-{0}-7sth0ewvp6-7sth0ewvp6.gz
+D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\net10.0\compressed\l89ix78vu2-{0}-d7z93870v9-d7z93870v9.gz
+D:\National Seismic Instrument\Release\Software\DPLL_Ultrasonic_DAQ\obj\Debug\net10.0\compressed\0xz7o5mvtf-{0}-d4oo5j5mrv-d4oo5j5mrv.gz

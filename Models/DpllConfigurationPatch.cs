@@ -13,6 +13,10 @@ public sealed class DpllConfigurationPatch
     public double? TargetPhase { get; set; }
     public double? MaxSlew { get; set; }
     public uint? LoopPeriodMs { get; set; }
+    public double? LockThresholdNs { get; set; }
+    public uint? LockHoldCycles { get; set; }
+    public uint? LockMemoryTimeoutMs { get; set; }
+    public uint? StreamPeriodMs { get; set; }
     public bool? ManualMode { get; set; }
     public int? SignalLossBehavior { get; set; }
 }

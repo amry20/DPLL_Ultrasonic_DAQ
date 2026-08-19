@@ -134,6 +134,22 @@
           <input id="loopInput" type="number" step="1" min="1" max="1000" placeholder="—" />
         </div>
         <div class="field">
+          <label for="thrInput">Lock threshold <span class="unit">(ns)</span></label>
+          <input id="thrInput" type="number" step="1" min="0" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="holdInput">Lock hold cycles</label>
+          <input id="holdInput" type="number" step="1" min="1" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="timeoutInput">Lock memory timeout <span class="unit">(ms)</span></label>
+          <input id="timeoutInput" type="number" step="1" min="0" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="streamInput">Stream period <span class="unit">(ms)</span></label>
+          <input id="streamInput" type="number" step="1" min="1" max="65535" placeholder="—" />
+        </div>
+        <div class="field">
           <label for="lossInput">Signal-loss behavior</label>
           <select id="lossInput">
             <option value="0">Freeze</option>

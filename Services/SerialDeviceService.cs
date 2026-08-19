@@ -16,18 +16,17 @@ public enum DeviceConnectionState
 }
 
 /// <summary>
-/// Manages the two serial links to the DPLL firmware:
+/// Manages the single serial link to the DPLL firmware. One COM port carries
+/// BOTH traffic types:
 /// <list type="bullet">
-/// <item><b>Telemetry port</b> — the USB CDC virtual COM port (SerialUSB).
-/// Binary opcode protocol: the host enables the 100 Hz stream with opcode
-/// 0x0017 and receives 0x0019 status packets.</item>
-/// <item><b>Control port</b> — the DebugPort (PA10/PA9) hardware UART.
-/// ASCII command line protocol (kp/ki/kd/center/target/slew/loop/loss/gain/
-/// dac/reset/run/help). This is the ONLY channel that can change tuning
-/// parameters — the firmware's binary interface only handles 0x0017.</item>
+/// <item><b>Binary telemetry</b> — opcode packets (host enables the 100 Hz
+/// stream with 0x0017, firmware streams 0x0019 status packets).</item>
+/// <item><b>ASCII control</b> — command lines (kp/ki/kd/center/target/slew/
+/// loop/loss/gain/dac/reset/run/help) and the parseable <c>gain</c> report.</item>
 /// </list>
-/// Auto-reconnect is attempted on each link while the user has requested it
-/// to stay open. Overall connection state is the AND of both links.
+/// Incoming bytes are demultiplexed: binary packets are parsed with
+/// <see cref="DpllProtocol"/>, everything else is treated as ASCII text lines.
+/// Auto-reconnect is attempted while a port is requested.
 /// </summary>
 public sealed class SerialDeviceService : IDisposable
 {
@@ -36,19 +35,14 @@ public sealed class SerialDeviceService : IDisposable
     private SerialOptions _options;
     private readonly IDisposable? _changeSubscription;
 
-    private readonly object _telemetryWriteLock = new();
-    private readonly object _controlWriteLock = new();
+    private readonly object _writeLock = new();
     private readonly List<byte> _rxBuffer = new(2048);
     private readonly StringBuilder _asciiLine = new();
 
-    private SerialPort? _telemetryPort;
-    private SerialPort? _controlPort;
-    private CancellationTokenSource? _telemetryReadCts;
-    private CancellationTokenSource? _controlReadCts;
-    private Task? _telemetryReadTask;
-    private Task? _controlReadTask;
-    private string? _requestedTelemetryPort;
-    private string? _requestedControlPort;
+    private SerialPort? _port;
+    private CancellationTokenSource? _readCts;
+    private Task? _readTask;
+    private string? _requestedPort;
     private bool _streamEnabled;
 
     private DeviceConnectionState _state = DeviceConnectionState.Disconnected;
@@ -67,83 +61,60 @@ public sealed class SerialDeviceService : IDisposable
         _options = optionsMonitor.CurrentValue;
         _logger = logger;
         // Re-apply serial options (e.g. serial.json edited on disk) without a restart:
-        // close the old ports and reconnect to the newly configured ones.
+        // close the old port and reconnect to the newly configured one.
         _changeSubscription = _optionsMonitor.OnChange(OnOptionsChanged);
     }
 
     private void OnOptionsChanged(SerialOptions next)
     {
-        _logger.LogInformation("Serial configuration changed: telemetry={T}, control={C}, baud={B}",
-            next.PortName, next.ControlPortName, next.BaudRate);
+        _logger.LogInformation("Serial configuration changed: port={P}, baud={B}", next.PortName, next.BaudRate);
         _options = next;
-        ApplyConfiguredPorts();
+        ApplyConfiguredPort();
     }
 
-    /// <summary>Start the configured links (called once at application startup).</summary>
-    public void Start() => ApplyConfiguredPorts();
+    /// <summary>Start the configured link (called once at application startup).</summary>
+    public void Start() => ApplyConfiguredPort();
 
-    /// <summary>Stop both links and unsubscribe from configuration changes.</summary>
+    /// <summary>Stop the link and unsubscribe from configuration changes.</summary>
     public void Stop()
     {
-        _requestedTelemetryPort = null;
-        _requestedControlPort = null;
-        CloseTelemetryPort();
-        CloseControlPort();
+        _requestedPort = null;
+        ClosePort();
         SetState(DeviceConnectionState.Disconnected, null);
     }
 
-    private void ApplyConfiguredPorts()
+    private void ApplyConfiguredPort()
     {
         if (_disposed)
         {
             return;
         }
-        var telemetry = _options.PortName;
-        var control = _options.ControlPortName;
+        var portName = _options.PortName;
 
-        // Re-point telemetry link.
-        if (string.Equals(_requestedTelemetryPort, telemetry, StringComparison.OrdinalIgnoreCase))
+        // Re-point the link.
+        if (string.Equals(_requestedPort, portName, StringComparison.OrdinalIgnoreCase))
         {
             // same port — leave the connect loop alone
         }
         else
         {
-            _requestedTelemetryPort = telemetry;
-            CloseTelemetryPort();
-            if (!string.IsNullOrWhiteSpace(telemetry))
+            _requestedPort = portName;
+            ClosePort();
+            if (!string.IsNullOrWhiteSpace(portName))
             {
-                _logger.LogInformation("Auto-connecting telemetry link to {Port} at {Baud} baud...", telemetry, _options.BaudRate);
-                _ = Task.Run(TryOpenTelemetryLoop);
-            }
-        }
-
-        // Re-point control link.
-        if (string.Equals(_requestedControlPort, control, StringComparison.OrdinalIgnoreCase))
-        {
-            // same port — leave the connect loop alone
-        }
-        else
-        {
-            _requestedControlPort = control;
-            CloseControlPort();
-            if (!string.IsNullOrWhiteSpace(control))
-            {
-                _logger.LogInformation("Auto-connecting control link to {Port} at {Baud} baud...", control, _options.BaudRate);
-                _ = Task.Run(TryOpenControlLoop);
+                _logger.LogInformation("Auto-connecting to {Port} at {Baud} baud...", portName, _options.BaudRate);
+                _ = Task.Run(TryOpenLoop);
             }
         }
 
         UpdateConnectionState();
     }
 
-    /// <summary>Current overall connection state (AND of both links).</summary>
+    /// <summary>Current overall connection state.</summary>
     public DeviceConnectionState State => _state;
 
-    /// <summary>The telemetry COM port in use (or being connected to).</summary>
-    public string? PortName => _requestedTelemetryPort;
-
-    /// <summary>The control COM port in use (or being connected to).</summary>
-    public string? ControlPortName => _requestedControlPort;
+    /// <summary>The COM port in use (or being connected to).</summary>
+    public string? PortName => _requestedPort;
 
     /// <summary>Latest telemetry sample, or null if none received yet.</summary>
     public DpllTelemetry? Latest => _latest;
@@ -161,11 +132,8 @@ public sealed class SerialDeviceService : IDisposable
     // Connection management
     // ------------------------------------------------------------------
 
-    /// <summary>Open the telemetry link (USB CDC binary stream).</summary>
-    public void Connect(string portName) => ConnectTelemetry(portName);
-
-    /// <summary>Open the telemetry link (USB CDC binary stream).</summary>
-    public void ConnectTelemetry(string portName)
+    /// <summary>Open the serial link (binary + ASCII on the same port).</summary>
+    public void Connect(string portName)
     {
         ThrowIfDisposed();
         if (string.IsNullOrWhiteSpace(portName))
@@ -173,50 +141,32 @@ public sealed class SerialDeviceService : IDisposable
             throw new ArgumentException("Port name is required.", nameof(portName));
         }
 
-        _requestedTelemetryPort = portName;
-        _logger.LogInformation("Connecting telemetry link to {Port} at {Baud} baud...", portName, _options.BaudRate);
+        _requestedPort = portName;
+        _logger.LogInformation("Connecting to {Port} at {Baud} baud...", portName, _options.BaudRate);
 
-        CloseTelemetryPort();
-        _ = Task.Run(TryOpenTelemetryLoop);
+        ClosePort();
+        _ = Task.Run(TryOpenLoop);
     }
 
-    /// <summary>Open the control link (DebugPort ASCII UART).</summary>
-    public void ConnectControl(string portName)
-    {
-        ThrowIfDisposed();
-        if (string.IsNullOrWhiteSpace(portName))
-        {
-            throw new ArgumentException("Port name is required.", nameof(portName));
-        }
-
-        _requestedControlPort = portName;
-        _logger.LogInformation("Connecting control link to {Port} at {Baud} baud...", portName, _options.BaudRate);
-
-        CloseControlPort();
-        _ = Task.Run(TryOpenControlLoop);
-    }
-
-    /// <summary>Close both links and stop auto-reconnect.</summary>
+    /// <summary>Close the link and stop auto-reconnect.</summary>
     public void Disconnect()
     {
         ThrowIfDisposed();
-        _requestedTelemetryPort = null;
-        _requestedControlPort = null;
-        CloseTelemetryPort();
-        CloseControlPort();
+        _requestedPort = null;
+        ClosePort();
         SetState(DeviceConnectionState.Disconnected, null);
     }
 
-    private void TryOpenTelemetryLoop()
+    private void TryOpenLoop()
     {
-        if (_disposed || string.IsNullOrEmpty(_requestedTelemetryPort))
+        if (_disposed || string.IsNullOrEmpty(_requestedPort))
         {
             return;
         }
 
-        while (!_disposed && !string.IsNullOrEmpty(_requestedTelemetryPort))
+        while (!_disposed && !string.IsNullOrEmpty(_requestedPort))
         {
-            string port = _requestedTelemetryPort;
+            string port = _requestedPort;
             try
             {
                 SetState(DeviceConnectionState.Connecting, port);
@@ -235,85 +185,31 @@ public sealed class SerialDeviceService : IDisposable
                 };
                 portObj.Open();
 
-                lock (_telemetryWriteLock)
+                lock (_writeLock)
                 {
-                    _telemetryPort = portObj;
+                    _port = portObj;
                 }
                 _rxBuffer.Clear();
-
-                _telemetryReadCts = new CancellationTokenSource();
-                _telemetryReadTask = Task.Run(() => ReadTelemetryLoopAsync(portObj, _telemetryReadCts.Token));
-
-                _streamEnabled = false;
-                _logger.LogInformation("Telemetry link connected to {Port}. Enabling stream...", port);
-                UpdateConnectionState();
-
-                // Ask firmware to start the 100 Hz telemetry stream.
-                EnableStream(true);
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("Failed to connect telemetry link to {Port}: {Message}. Retrying in {Delay} ms...",
-                    port, ex.Message, _options.ReconnectDelayMs);
-                CloseTelemetryPort();
-                SetState(DeviceConnectionState.Error, ex.Message);
-
-                try { Thread.Sleep(_options.ReconnectDelayMs); }
-                catch (ThreadInterruptedException) { return; }
-            }
-        }
-    }
-
-    private void TryOpenControlLoop()
-    {
-        if (_disposed || string.IsNullOrEmpty(_requestedControlPort))
-        {
-            return;
-        }
-
-        while (!_disposed && !string.IsNullOrEmpty(_requestedControlPort))
-        {
-            string port = _requestedControlPort;
-            try
-            {
-                SetState(DeviceConnectionState.Connecting, port);
-
-                if (!SerialPort.GetPortNames().Contains(port, StringComparer.OrdinalIgnoreCase))
-                {
-                    throw new IOException($"Port '{port}' is not available.");
-                }
-
-                var portObj = new SerialPort(port, _options.BaudRate, Parity.None, 8, StopBits.One)
-                {
-                    ReadTimeout = 1000,
-                    WriteTimeout = 1000,
-                    DtrEnable = true,
-                    RtsEnable = true
-                };
-                portObj.Open();
-
-                lock (_controlWriteLock)
-                {
-                    _controlPort = portObj;
-                }
                 _asciiLine.Clear();
 
-                _controlReadCts = new CancellationTokenSource();
-                _controlReadTask = Task.Run(() => ReadControlLoopAsync(portObj, _controlReadCts.Token));
+                _readCts = new CancellationTokenSource();
+                _readTask = Task.Run(() => ReadLoopAsync(portObj, _readCts.Token));
 
-                _logger.LogInformation("Control link connected to {Port}.", port);
+                _streamEnabled = false;
+                _logger.LogInformation("Connected to {Port}. Enabling stream...", port);
                 UpdateConnectionState();
 
-                // Pull the current configuration (ASCII "gain" command).
+                // Ask firmware to start the 100 Hz telemetry stream, then pull the
+                // current configuration (ASCII "gain" command).
+                EnableStream(true);
                 RefreshConfiguration();
                 return;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Failed to connect control link to {Port}: {Message}. Retrying in {Delay} ms...",
+                _logger.LogWarning("Failed to connect to {Port}: {Message}. Retrying in {Delay} ms...",
                     port, ex.Message, _options.ReconnectDelayMs);
-                CloseControlPort();
+                ClosePort();
                 SetState(DeviceConnectionState.Error, ex.Message);
 
                 try { Thread.Sleep(_options.ReconnectDelayMs); }
@@ -322,67 +218,41 @@ public sealed class SerialDeviceService : IDisposable
         }
     }
 
-    private void CloseTelemetryPort()
+    private void ClosePort()
     {
-        _telemetryReadCts?.Cancel();
-        _telemetryReadTask = null;
+        _readCts?.Cancel();
+        _readTask = null;
 
-        lock (_telemetryWriteLock)
+        lock (_writeLock)
         {
-            var p = _telemetryPort;
-            _telemetryPort = null;
+            var p = _port;
+            _port = null;
             try { p?.Close(); } catch { /* ignore */ }
             try { p?.Dispose(); } catch { /* ignore */ }
         }
-        _telemetryReadCts?.Dispose();
-        _telemetryReadCts = null;
+        _readCts?.Dispose();
+        _readCts = null;
         _streamEnabled = false;
         _rxBuffer.Clear();
-    }
-
-    private void CloseControlPort()
-    {
-        _controlReadCts?.Cancel();
-        _controlReadTask = null;
-
-        lock (_controlWriteLock)
-        {
-            var p = _controlPort;
-            _controlPort = null;
-            try { p?.Close(); } catch { /* ignore */ }
-            try { p?.Dispose(); } catch { /* ignore */ }
-        }
-        _controlReadCts?.Dispose();
-        _controlReadCts = null;
         _asciiLine.Clear();
     }
 
     private void UpdateConnectionState()
     {
-        bool telemetryUp = !string.IsNullOrEmpty(_requestedTelemetryPort) && _telemetryPort is { IsOpen: true };
-        bool controlUp = !string.IsNullOrEmpty(_requestedControlPort) && _controlPort is { IsOpen: true };
+        bool up = !string.IsNullOrEmpty(_requestedPort) && _port is { IsOpen: true };
 
         DeviceConnectionState next;
         string? detail = null;
 
-        if (!string.IsNullOrEmpty(_requestedTelemetryPort) && !telemetryUp)
+        if (!string.IsNullOrEmpty(_requestedPort) && !up)
         {
-            next = _telemetryPort is null ? DeviceConnectionState.Connecting : DeviceConnectionState.Error;
-            detail = _requestedTelemetryPort;
+            next = _port is null ? DeviceConnectionState.Connecting : DeviceConnectionState.Error;
+            detail = _requestedPort;
         }
-        else if (!string.IsNullOrEmpty(_requestedControlPort) && !controlUp)
-        {
-            next = _controlPort is null ? DeviceConnectionState.Connecting : DeviceConnectionState.Error;
-            detail = _requestedControlPort;
-        }
-        else if (telemetryUp || controlUp)
+        else if (up)
         {
             next = DeviceConnectionState.Connected;
-            detail = string.Join(", ", new[]
-            {
-                telemetryUp ? $"T:{_requestedTelemetryPort}" : null,
-                controlUp ? $"C:{_requestedControlPort}" : null
-            }.Where(s => s is not null));
+            detail = _requestedPort;
         }
         else
         {
@@ -404,10 +274,10 @@ public sealed class SerialDeviceService : IDisposable
     }
 
     // ------------------------------------------------------------------
-    // Reading — telemetry (binary)
+    // Reading — demultiplexed (binary packets + ASCII lines)
     // ------------------------------------------------------------------
 
-    private async Task ReadTelemetryLoopAsync(SerialPort port, CancellationToken token)
+    private async Task ReadLoopAsync(SerialPort port, CancellationToken token)
     {
         byte[] chunk = new byte[512];
         try
@@ -423,8 +293,41 @@ public sealed class SerialDeviceService : IDisposable
 
                 for (int i = 0; i < n; i++)
                 {
-                    _rxBuffer.Add(chunk[i]);
+                    byte b = chunk[i];
+                    if (b is (byte)'\n')
+                    {
+                        // Flush any buffered binary bytes first, then treat the
+                        // accumulated characters as one ASCII line.
+                        TryParsePackets();
+
+                        string line = _asciiLine.ToString().Trim();
+                        _asciiLine.Clear();
+                        if (line.Length > 0)
+                        {
+                            HandleAsciiLine(line);
+                        }
+                        continue;
+                    }
+                    if (b is (byte)'\r')
+                    {
+                        continue;
+                    }
+
+                    // Binary frame bytes are outside the printable ASCII range
+                    // (0x20–0x7E): 0xAA start marker, opcode/len little-endian
+                    // words, float payloads, checksum. Printable bytes start or
+                    // continue an ASCII command line.
+                    if (b < 0x20 || b > 0x7E)
+                    {
+                        _rxBuffer.Add(b);
+                    }
+                    else
+                    {
+                        _asciiLine.Append((char)b);
+                    }
                 }
+
+                // Flush partial binary packets.
                 TryParsePackets();
             }
         }
@@ -434,11 +337,11 @@ public sealed class SerialDeviceService : IDisposable
         }
         catch (Exception ex) when (!token.IsCancellationRequested)
         {
-            _logger.LogWarning("Telemetry read loop ended: {Message}", ex.Message);
-            if (!_disposed && !string.IsNullOrEmpty(_requestedTelemetryPort))
+            _logger.LogWarning("Read loop ended: {Message}", ex.Message);
+            if (!_disposed && !string.IsNullOrEmpty(_requestedPort))
             {
-                CloseTelemetryPort();
-                _ = Task.Run(TryOpenTelemetryLoop);
+                ClosePort();
+                _ = Task.Run(TryOpenLoop);
             }
         }
     }
@@ -482,60 +385,6 @@ public sealed class SerialDeviceService : IDisposable
         }
     }
 
-    // ------------------------------------------------------------------
-    // Reading — control (ASCII)
-    // ------------------------------------------------------------------
-
-    private async Task ReadControlLoopAsync(SerialPort port, CancellationToken token)
-    {
-        byte[] chunk = new byte[512];
-        try
-        {
-            while (!token.IsCancellationRequested && port.IsOpen)
-            {
-                int n = await port.BaseStream.ReadAsync(chunk.AsMemory(0, chunk.Length), token).ConfigureAwait(false);
-                if (n <= 0)
-                {
-                    await Task.Delay(5, token).ConfigureAwait(false);
-                    continue;
-                }
-
-                for (int i = 0; i < n; i++)
-                {
-                    byte b = chunk[i];
-                    if (b is (byte)'\r')
-                    {
-                        continue;
-                    }
-                    if (b is (byte)'\n')
-                    {
-                        string line = _asciiLine.ToString().Trim();
-                        _asciiLine.Clear();
-                        if (line.Length > 0)
-                        {
-                            HandleAsciiLine(line);
-                        }
-                        continue;
-                    }
-                    _asciiLine.Append((char)b);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Normal shutdown.
-        }
-        catch (Exception ex) when (!token.IsCancellationRequested)
-        {
-            _logger.LogWarning("Control read loop ended: {Message}", ex.Message);
-            if (!_disposed && !string.IsNullOrEmpty(_requestedControlPort))
-            {
-                CloseControlPort();
-                _ = Task.Run(TryOpenControlLoop);
-            }
-        }
-    }
-
     private void HandleAsciiLine(string line)
     {
         // The firmware "gain" command prints a parseable status line:
@@ -567,6 +416,9 @@ public sealed class SerialDeviceService : IDisposable
                     case "manual": cfg.ManualMode = value.StartsWith("yes", StringComparison.OrdinalIgnoreCase); break;
                     case "loop": cfg.LoopPeriodMs = (uint)ParseDouble(value, "ms"); break;
                     case "thr": cfg.LockThresholdNs = ParseDouble(value, "ns"); break;
+                    case "hold": cfg.LockHoldCycles = (uint)ParseDouble(value, null); break;
+                    case "timeout": cfg.LockMemoryTimeoutMs = (uint)ParseDouble(value, "ms"); break;
+                    case "stream": cfg.StreamPeriodMs = (uint)ParseDouble(value, "ms"); break;
                     case "lockedv": cfg.LockedCenterV = ParseDouble(value, "V"); cfg.HaveLockedCenter = !value.Contains("default", StringComparison.OrdinalIgnoreCase); break;
                     case "loss": cfg.SignalLossBehavior = (int)ParseDouble(value, null); break;
                 }
@@ -604,7 +456,7 @@ public sealed class SerialDeviceService : IDisposable
         SendBinary(Opcode.SET_ALLOW_SEND_STREAM, [enable ? (byte)1 : (byte)0]);
     }
 
-    /// <summary>Send a raw binary packet (telemetry port only).</summary>
+    /// <summary>Send a raw binary packet on the serial port.</summary>
     public void SendBinary(ushort opcode, ReadOnlySpan<byte> payload)
     {
         if (_disposed)
@@ -612,12 +464,12 @@ public sealed class SerialDeviceService : IDisposable
             return;
         }
         var packet = DpllProtocol.BuildPacket(opcode, 0, payload);
-        lock (_telemetryWriteLock)
+        lock (_writeLock)
         {
-            var p = _telemetryPort;
+            var p = _port;
             if (p is null || !p.IsOpen)
             {
-                _logger.LogDebug("Telemetry write dropped: port not open (opcode 0x{Opcode:X4})", opcode);
+                _logger.LogDebug("Binary write dropped: port not open (opcode 0x{Opcode:X4})", opcode);
                 return;
             }
             try
@@ -626,12 +478,12 @@ public sealed class SerialDeviceService : IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Telemetry write failed: {Message}", ex.Message);
+                _logger.LogWarning("Binary write failed: {Message}", ex.Message);
             }
         }
     }
 
-    /// <summary>Send a raw ASCII debug command line on the control port.</summary>
+    /// <summary>Send a raw ASCII debug command line on the serial port.</summary>
     public void SendAscii(string command)
     {
         if (_disposed || string.IsNullOrWhiteSpace(command))
@@ -639,12 +491,12 @@ public sealed class SerialDeviceService : IDisposable
             return;
         }
         byte[] bytes = Encoding.ASCII.GetBytes(command.Trim() + "\r\n");
-        lock (_controlWriteLock)
+        lock (_writeLock)
         {
-            var p = _controlPort;
+            var p = _port;
             if (p is null || !p.IsOpen)
             {
-                _logger.LogDebug("Control write dropped: port not open ({Command})", command);
+                _logger.LogDebug("ASCII write dropped: port not open ({Command})", command);
                 return;
             }
             try
@@ -653,7 +505,7 @@ public sealed class SerialDeviceService : IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Control write failed: {Message}", ex.Message);
+                _logger.LogWarning("ASCII write failed: {Message}", ex.Message);
             }
         }
     }
@@ -662,9 +514,14 @@ public sealed class SerialDeviceService : IDisposable
     public void RefreshConfiguration() => SendAscii("gain");
 
     /// <summary>
-    /// Apply a set of configuration values. Tuning parameters are sent as
-    /// ASCII commands on the control port (the firmware's binary interface
-    /// only handles 0x0017). Afterwards the config is refreshed.
+    /// Apply a set of configuration values.
+    /// <para>
+    /// Settings with a firmware ASCII command (Kp/Ki/Kd/center/target/slew/loop/
+    /// loss/manual/timeout) are sent as ASCII command lines. Settings that only
+    /// exist as binary opcodes in the firmware <c>Opcode.h</c> (lock threshold,
+    /// lock hold cycles, stream period) are sent as binary SET packets.
+    /// </para>
+    /// Afterwards the config is refreshed via the <c>gain</c> report.
     /// </summary>
     public void ApplyConfiguration(DpllConfigurationPatch patch)
     {
@@ -675,11 +532,21 @@ public sealed class SerialDeviceService : IDisposable
         if (patch.TargetPhase.HasValue) SendAscii($"target {FormatFloat(patch.TargetPhase.Value)}");
         if (patch.MaxSlew.HasValue) SendAscii($"slew {FormatFloat(patch.MaxSlew.Value)}");
         if (patch.LoopPeriodMs.HasValue) SendAscii($"loop {patch.LoopPeriodMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        if (patch.LockMemoryTimeoutMs.HasValue) SendAscii($"timeout {patch.LockMemoryTimeoutMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         if (patch.SignalLossBehavior.HasValue) SendAscii($"loss {(int)patch.SignalLossBehavior.Value}");
         if (patch.ManualMode.HasValue)
         {
             SendAscii(patch.ManualMode.Value ? "dac 1.65" : "run");
         }
+
+        // Settings without an ASCII command — send as binary SET opcodes
+        // (handled by the firmware commandProccessor() switch in main.cpp).
+        if (patch.LockThresholdNs.HasValue)
+            SendBinary(Opcode.SET_LOCK_THRESHOLD, DpllProtocol.EncodeFloat((float)patch.LockThresholdNs.Value));
+        if (patch.LockHoldCycles.HasValue)
+            SendBinary(Opcode.SET_LOCK_HOLD_CYCLES, DpllProtocol.EncodeUInt32(patch.LockHoldCycles.Value));
+        if (patch.StreamPeriodMs.HasValue)
+            SendBinary(Opcode.SET_STREAM_PERIOD, DpllProtocol.EncodeUInt32(patch.StreamPeriodMs.Value));
 
         RefreshConfiguration();
     }
@@ -707,10 +574,8 @@ public sealed class SerialDeviceService : IDisposable
         }
         _disposed = true;
         _changeSubscription?.Dispose();
-        _requestedTelemetryPort = null;
-        _requestedControlPort = null;
-        CloseTelemetryPort();
-        CloseControlPort();
+        _requestedPort = null;
+        ClosePort();
     }
 
     private void ThrowIfDisposed()

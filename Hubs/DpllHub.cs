@@ -29,7 +29,7 @@ public class DpllHub : Hub
         {
             Clients.Caller.SendAsync("Configuration", c);
         }
-        Clients.Caller.SendAsync("ConnectionState", (int)_device.State, _device.PortName, _device.ControlPortName);
+        Clients.Caller.SendAsync("ConnectionState", (int)_device.State, _device.PortName);
         return base.OnConnectedAsync();
     }
 

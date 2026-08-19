@@ -6,19 +6,12 @@ public sealed class SerialOptions
     public const string SectionName = "Serial";
 
     /// <summary>
-    /// Telemetry COM port name (e.g. COM9) — the USB CDC virtual port the
-    /// firmware uses for the binary opcode stream. Empty/auto = let the UI
-    /// pick from detected ports.
+    /// Serial COM port name (e.g. COM9) — the port the firmware uses for BOTH
+    /// the binary telemetry stream and ASCII tuning commands. Empty = disabled.
     /// </summary>
     public string? PortName { get; set; }
 
-    /// <summary>
-    /// Control COM port name — the DebugPort (PA10/PA9) hardware UART the
-    /// firmware uses for ASCII tuning commands. Empty/auto = let the UI pick.
-    /// </summary>
-    public string? ControlPortName { get; set; }
-
-    /// <summary>Baud rate, defaults to the firmware's 115200 (both ports).</summary>
+    /// <summary>Baud rate, defaults to the firmware's 115200.</summary>
     public int BaudRate { get; set; } = 115200;
 
     /// <summary>Host reconnect delay between connection attempts, ms.</summary>

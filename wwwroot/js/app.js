@@ -7,8 +7,7 @@
 // ---------------- State ----------------
 const state = {
   connected: false,
-  telemetryPort: null,
-  controlPort: null,
+  port: null,
   telemetry: null,
   config: null,
   paused: false,
@@ -55,6 +54,10 @@ const els = {
   targetInput: $('targetInput'),
   slewInput: $('slewInput'),
   loopInput: $('loopInput'),
+  thrInput: $('thrInput'),
+  holdInput: $('holdInput'),
+  timeoutInput: $('timeoutInput'),
+  streamInput: $('streamInput'),
   lossInput: $('lossInput'),
   resetLoopBtn: $('resetLoopBtn'),
   runLoopBtn: $('runLoopBtn'),
@@ -155,12 +158,16 @@ function onConfiguration(cfg) {
   els.targetInput.value = fmt(cfg.TargetPhase, 1);
   els.slewInput.value = fmt(cfg.MaxSlew, 2);
   els.loopInput.value = cfg.LoopPeriodMs;
+  els.thrInput.value = fmt(cfg.LockThresholdNs, 0);
+  els.holdInput.value = cfg.LockHoldCycles;
+  els.timeoutInput.value = cfg.LockMemoryTimeoutMs;
+  els.streamInput.value = cfg.StreamPeriodMs;
   els.lossInput.value = cfg.SignalLossBehavior;
   els.applyCfgBtn.disabled = !state.connected;
   els.loopValue.textContent = cfg.LoopPeriodMs;
 
   els.manualFlag.hidden = !cfg.ManualMode;
-  log('ok', `Config loaded: Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · loss=${cfg.SignalLossName}`);
+  log('ok', `Config loaded: Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · thr=${cfg.LockThresholdNs} ns · hold=${cfg.LockHoldCycles} · timeout=${cfg.LockMemoryTimeoutMs} ms · stream=${cfg.StreamPeriodMs} ms · loss=${cfg.SignalLossName}`);
 }
 
 const LOCK_STATES = {
@@ -170,10 +177,9 @@ const LOCK_STATES = {
   3: { text: 'LOCK', cls: 'lock' },
 };
 
-function onConnectionState(code, telemetryPort, controlPort) {
+function onConnectionState(code, port) {
   state.connected = code === 2; // Connected
-  state.telemetryPort = code === 2 ? telemetryPort : null;
-  state.controlPort = code === 2 ? controlPort : null;
+  state.port = code === 2 ? port : null;
 
   setUiConnected(state.connected);
 
@@ -184,16 +190,16 @@ function onConnectionState(code, telemetryPort, controlPort) {
       break;
     case 1:
       setConnBadge('warn', 'CONNECTING');
-      log('info', `Connecting to ${[telemetryPort, controlPort].filter(Boolean).join(' + ') || 'configured ports'}…`);
+      log('info', `Connecting to ${port || 'configured port'}…`);
       break;
     case 2:
-      setConnBadge('ok', `ONLINE · T:${telemetryPort || '—'} C:${controlPort || '—'}`);
-      log('ok', `Connected: telemetry=${telemetryPort || '—'} control=${controlPort || '—'}`);
+      setConnBadge('ok', `ONLINE · ${port || '—'}`);
+      log('ok', `Connected: ${port || '—'}`);
       refreshConfiguration();
       break;
     case 3:
       setConnBadge('danger', 'ERROR');
-      log('error', `Connection error: ${telemetryPort || controlPort || 'unknown'}`);
+      log('error', `Connection error: ${port || 'unknown'}`);
       break;
   }
 }
@@ -347,6 +353,10 @@ function onApplyConfig() {
   const target = num(els.targetInput);
   const slew = num(els.slewInput);
   const loop = num(els.loopInput);
+  const thr = num(els.thrInput);
+  const hold = num(els.holdInput);
+  const timeout = num(els.timeoutInput);
+  const stream = num(els.streamInput);
   const loss = parseInt(els.lossInput.value, 10);
 
   if (kp !== null && kp >= 0) patch.Kp = kp;
@@ -356,6 +366,10 @@ function onApplyConfig() {
   if (target !== null) patch.TargetPhase = target;
   if (slew !== null && slew > 0) patch.MaxSlew = slew;
   if (loop !== null && loop >= 1 && loop <= 1000) patch.LoopPeriodMs = loop;
+  if (thr !== null && thr >= 0) patch.LockThresholdNs = thr;
+  if (hold !== null && hold >= 1) patch.LockHoldCycles = hold;
+  if (timeout !== null && timeout >= 0) patch.LockMemoryTimeoutMs = timeout;
+  if (stream !== null && stream >= 1 && stream <= 65535) patch.StreamPeriodMs = stream;
   patch.SignalLossBehavior = loss;
 
   if (Object.keys(patch).length === 0) {

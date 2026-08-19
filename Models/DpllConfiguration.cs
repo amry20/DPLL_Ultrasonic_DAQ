@@ -33,6 +33,15 @@ public sealed class DpllConfiguration
     /// <summary>Lock threshold, ns.</summary>
     public double LockThresholdNs { get; set; }
 
+    /// <summary>Consecutive LOCK cycles required before committing the lock-point voltage. Default 10.</summary>
+    public uint LockHoldCycles { get; set; }
+
+    /// <summary>Lock memory expiry in ms (0 = never). Default 5000.</summary>
+    public uint LockMemoryTimeoutMs { get; set; }
+
+    /// <summary>Monitor stream period in ms (1–65535). Default 100 ms = 10 Hz.</summary>
+    public uint StreamPeriodMs { get; set; }
+
     /// <summary>Last committed lock-point voltage, volts.</summary>
     public double LockedCenterV { get; set; }
 

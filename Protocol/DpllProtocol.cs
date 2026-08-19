@@ -3,26 +3,27 @@ using DPLL_Ultrasonic_DAQ.Models;
 
 namespace DPLL_Ultrasonic_DAQ.Protocol;
 
-/// <summary>Opcode values — must match the firmware's <c>opcode.h</c> enum.</summary>
+/// <summary>Opcode values — must match the firmware's <c>Opcode.h</c> enum.</summary>
 public static class Opcode
 {
     public const ushort ILEGAL_OPCODE = 0x0000;
-    public const ushort SET_KP = 0x0001;
-    public const ushort GET_KP = 0x0002;
-    public const ushort SET_KI = 0x0003;
-    public const ushort GET_KI = 0x0004;
-    public const ushort SET_KD = 0x0005;
-    public const ushort GET_KD = 0x0006;
-    public const ushort SET_CENTER_VOLTAGE = 0x0007;
-    public const ushort GET_CENTER_VOLTAGE = 0x0008;
-    public const ushort SET_TARGET_PHASE = 0x0009;
-    public const ushort GET_TARGET_PHASE = 0x000A;
-    public const ushort SET_OUTPUT_LIMITS = 0x000B;
-    public const ushort GET_OUTPUT_LIMITS = 0x000C;
-    public const ushort SET_MAX_SLEW = 0x000D;
-    public const ushort GET_MAX_SLEW = 0x000E;
-    public const ushort SET_ENABLE_LOOP = 0x000F;
-    public const ushort GET_LOOP_ENABLE = 0x0010;
+    public const ushort GET_VERSION = 0x0001;
+    public const ushort SET_KP = 0x0002;
+    public const ushort GET_KP = 0x0003;
+    public const ushort SET_KI = 0x0004;
+    public const ushort GET_KI = 0x0005;
+    public const ushort SET_KD = 0x0006;
+    public const ushort GET_KD = 0x0007;
+    public const ushort SET_CENTER_VOLTAGE = 0x0008;
+    public const ushort GET_CENTER_VOLTAGE = 0x0009;
+    public const ushort SET_TARGET_PHASE = 0x000A;
+    public const ushort GET_TARGET_PHASE = 0x000B;
+    public const ushort SET_OUTPUT_LIMITS = 0x000C;
+    public const ushort GET_OUTPUT_LIMITS = 0x000D;
+    public const ushort SET_MAX_SLEW = 0x000E;
+    public const ushort GET_MAX_SLEW = 0x000F;
+    public const ushort SET_ENABLE_LOOP = 0x0010;
+    public const ushort GET_LOOP_ENABLE = 0x0011;
     public const ushort RESET_LOOP = 0x0012;
     public const ushort SHUTDOWN_LOOP = 0x0013;
     public const ushort SET_VOLTAGE = 0x0014;
@@ -30,6 +31,20 @@ public static class Opcode
     public const ushort SET_ALLOW_SEND_STREAM = 0x0017;
     public const ushort GET_ALLOW_SEND_STREAM = 0x0018;
     public const ushort STREAM_DPLL_STATUS = 0x0019;
+    public const ushort SET_LOOP_PERIOD = 0x001A;
+    public const ushort GET_LOOP_PERIOD = 0x001B;
+    public const ushort SET_LOCK_THRESHOLD = 0x001C;
+    public const ushort GET_LOCK_THRESHOLD = 0x001D;
+    public const ushort SET_MANUAL_MODE = 0x001E;
+    public const ushort GET_MANUAL_MODE = 0x001F;
+    public const ushort SET_LOCK_HOLD_CYCLES = 0x0020;
+    public const ushort GET_LOCK_HOLD_CYCLES = 0x0021;
+    public const ushort SET_LOCK_MEMORY_TIMEOUT = 0x0022;
+    public const ushort GET_LOCK_MEMORY_TIMEOUT = 0x0023;
+    public const ushort SET_SIGNAL_LOSS_BEHAVIOR = 0x0024;
+    public const ushort GET_SIGNAL_LOSS_BEHAVIOR = 0x0025;
+    public const ushort SET_STREAM_PERIOD = 0x0026;
+    public const ushort GET_STREAM_PERIOD = 0x0027;
 }
 
 /// <summary>
@@ -185,4 +200,30 @@ public static class DpllProtocol
         }
         return BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset, 4)));
     }
+
+    // ------------------------------------------------------------------
+    // Payload encoders (little-endian, matching the firmware)
+    // ------------------------------------------------------------------
+
+    /// <summary>Encode a float as 4 little-endian bytes (firmware SET payloads).</summary>
+    public static byte[] EncodeFloat(float value)
+    {
+        byte[] bytes = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, BitConverter.SingleToInt32Bits(value));
+        return bytes;
+    }
+
+    /// <summary>Encode a uint32 as 4 little-endian bytes (firmware SET payloads).</summary>
+    public static byte[] EncodeUInt32(uint value)
+    {
+        byte[] bytes = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        return bytes;
+    }
+
+    /// <summary>Encode a bool as a single 0/1 byte (firmware SET payloads).</summary>
+    public static byte[] EncodeBool(bool value) => [value ? (byte)1 : (byte)0];
+
+    /// <summary>Encode a small uint8 value as a single byte (e.g. signal-loss behavior).</summary>
+    public static byte[] EncodeUInt8(byte value) => [value];
 }

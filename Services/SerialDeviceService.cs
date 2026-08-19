@@ -1,5 +1,5 @@
+using System.Buffers.Binary;
 using System.IO.Ports;
-using System.Text;
 using DPLL_Ultrasonic_DAQ.Models;
 using DPLL_Ultrasonic_DAQ.Protocol;
 using Microsoft.Extensions.Options;
@@ -16,16 +16,16 @@ public enum DeviceConnectionState
 }
 
 /// <summary>
-/// Manages the single serial link to the DPLL firmware. One COM port carries
-/// BOTH traffic types:
+/// Manages the single serial link to the DPLL firmware. The COM port carries
+/// ONLY binary opcode packets:
 /// <list type="bullet">
-/// <item><b>Binary telemetry</b> — opcode packets (host enables the 100 Hz
-/// stream with 0x0017, firmware streams 0x0019 status packets).</item>
-/// <item><b>ASCII control</b> — command lines (kp/ki/kd/center/target/slew/
-/// loop/loss/gain/dac/reset/run/help) and the parseable <c>gain</c> report.</item>
+/// <item><b>Outbound</b> — SET/GET opcodes for every parameter, plus the
+/// stream-enable command (0x0017) that turns on the telemetry stream.</item>
+/// <item><b>Inbound</b> — the 0x0019 status stream and GET responses.</item>
 /// </list>
-/// Incoming bytes are demultiplexed: binary packets are parsed with
-/// <see cref="DpllProtocol"/>, everything else is treated as ASCII text lines.
+/// There is no ASCII traffic on this port: the firmware's ASCII debug console
+/// runs on a separate hardware UART (DebugPort), so all host control must use
+/// binary opcodes. Incoming bytes are parsed with <see cref="DpllProtocol"/>.
 /// Auto-reconnect is attempted while a port is requested.
 /// </summary>
 public sealed class SerialDeviceService : IDisposable
@@ -37,7 +37,6 @@ public sealed class SerialDeviceService : IDisposable
 
     private readonly object _writeLock = new();
     private readonly List<byte> _rxBuffer = new(2048);
-    private readonly StringBuilder _asciiLine = new();
 
     private SerialPort? _port;
     private CancellationTokenSource? _readCts;
@@ -132,7 +131,7 @@ public sealed class SerialDeviceService : IDisposable
     // Connection management
     // ------------------------------------------------------------------
 
-    /// <summary>Open the serial link (binary + ASCII on the same port).</summary>
+    /// <summary>Open the serial link (binary opcode traffic only).</summary>
     public void Connect(string portName)
     {
         ThrowIfDisposed();
@@ -190,7 +189,6 @@ public sealed class SerialDeviceService : IDisposable
                     _port = portObj;
                 }
                 _rxBuffer.Clear();
-                _asciiLine.Clear();
 
                 _readCts = new CancellationTokenSource();
                 _readTask = Task.Run(() => ReadLoopAsync(portObj, _readCts.Token));
@@ -199,8 +197,8 @@ public sealed class SerialDeviceService : IDisposable
                 _logger.LogInformation("Connected to {Port}. Enabling stream...", port);
                 UpdateConnectionState();
 
-                // Ask firmware to start the 100 Hz telemetry stream, then pull the
-                // current configuration (ASCII "gain" command).
+                // Ask firmware to start the telemetry stream, then pull the
+                // current configuration via binary GET opcodes.
                 EnableStream(true);
                 RefreshConfiguration();
                 return;
@@ -234,7 +232,6 @@ public sealed class SerialDeviceService : IDisposable
         _readCts = null;
         _streamEnabled = false;
         _rxBuffer.Clear();
-        _asciiLine.Clear();
     }
 
     private void UpdateConnectionState()
@@ -274,7 +271,8 @@ public sealed class SerialDeviceService : IDisposable
     }
 
     // ------------------------------------------------------------------
-    // Reading — demultiplexed (binary packets + ASCII lines)
+    // Reading — binary packets only (the ASCII debug console runs on a
+    // separate firmware UART; this port never carries ASCII traffic).
     // ------------------------------------------------------------------
 
     private async Task ReadLoopAsync(SerialPort port, CancellationToken token)
@@ -293,41 +291,18 @@ public sealed class SerialDeviceService : IDisposable
 
                 for (int i = 0; i < n; i++)
                 {
-                    byte b = chunk[i];
-                    if (b is (byte)'\n')
-                    {
-                        // Flush any buffered binary bytes first, then treat the
-                        // accumulated characters as one ASCII line.
-                        TryParsePackets();
+                    _rxBuffer.Add(chunk[i]);
 
-                        string line = _asciiLine.ToString().Trim();
-                        _asciiLine.Clear();
-                        if (line.Length > 0)
-                        {
-                            HandleAsciiLine(line);
-                        }
-                        continue;
-                    }
-                    if (b is (byte)'\r')
+                    // Safety bound: if we never form a valid frame, drop the
+                    // buffer so it cannot grow without limit.
+                    if (_rxBuffer.Count > DpllProtocol.MaxPacketSize)
                     {
-                        continue;
-                    }
-
-                    // Binary frame bytes are outside the printable ASCII range
-                    // (0x20–0x7E): 0xAA start marker, opcode/len little-endian
-                    // words, float payloads, checksum. Printable bytes start or
-                    // continue an ASCII command line.
-                    if (b < 0x20 || b > 0x7E)
-                    {
-                        _rxBuffer.Add(b);
-                    }
-                    else
-                    {
-                        _asciiLine.Append((char)b);
+                        _logger.LogDebug("Binary buffer overflowed ({Count} bytes) — dropping as invalid frame", _rxBuffer.Count);
+                        _rxBuffer.Clear();
                     }
                 }
 
-                // Flush partial binary packets.
+                // Parse any complete packets now available.
                 TryParsePackets();
             }
         }
@@ -363,17 +338,62 @@ public sealed class SerialDeviceService : IDisposable
                 continue;
             }
 
-            if (opcode == Opcode.STREAM_DPLL_STATUS)
+            switch (opcode)
             {
-                var telemetry = DpllProtocol.DecodeStatusPayload(payload, DateTimeOffset.UtcNow);
-                _latest = telemetry;
-                _lastStreamAt = DateTimeOffset.UtcNow;
-                try { TelemetryReceived?.Invoke(telemetry); }
-                catch (Exception ex) { _logger.LogError(ex, "TelemetryReceived handler threw."); }
-            }
-            else
-            {
-                _logger.LogDebug("Received opcode 0x{Opcode:X4} ({Len} payload bytes)", opcode, payload.Length);
+                case Opcode.STREAM_DPLL_STATUS:
+                {
+                    var telemetry = DpllProtocol.DecodeStatusPayload(payload, DateTimeOffset.UtcNow);
+                    _latest = telemetry;
+                    _lastStreamAt = DateTimeOffset.UtcNow;
+                    try { TelemetryReceived?.Invoke(telemetry); }
+                    catch (Exception ex) { _logger.LogError(ex, "TelemetryReceived handler threw."); }
+                    break;
+                }
+
+                // --- GET responses: fold each value into the config snapshot ---
+                // (Read the span into locals first — a ref struct cannot be
+                // captured by the SetConfigValue lambda.)
+                case Opcode.GET_KP:
+                { var v = ReadFloat(payload); SetConfigValue(c => c.Kp = v); break; }
+                case Opcode.GET_KI:
+                { var v = ReadFloat(payload); SetConfigValue(c => c.Ki = v); break; }
+                case Opcode.GET_KD:
+                { var v = ReadFloat(payload); SetConfigValue(c => c.Kd = v); break; }
+                case Opcode.GET_CENTER_VOLTAGE:
+                { var v = ReadFloat(payload); SetConfigValue(c => c.CenterVoltage = v); break; }
+                case Opcode.GET_TARGET_PHASE:
+                { var v = ReadFloat(payload); SetConfigValue(c => c.TargetPhase = v); break; }
+                case Opcode.GET_MAX_SLEW:
+                { var v = ReadFloat(payload); SetConfigValue(c => c.MaxSlew = v); break; }
+                case Opcode.GET_LOOP_PERIOD:
+                { var v = ReadUInt32(payload); SetConfigValue(c => c.LoopPeriodMs = v); break; }
+                case Opcode.GET_LOCK_THRESHOLD:
+                { var v = ReadFloat(payload); SetConfigValue(c => c.LockThresholdNs = v); break; }
+                case Opcode.GET_LOCK_HOLD_CYCLES:
+                { var v = ReadUInt32(payload); SetConfigValue(c => c.LockHoldCycles = v); break; }
+                case Opcode.GET_LOCK_MEMORY_TIMEOUT:
+                { var v = ReadUInt32(payload); SetConfigValue(c => c.LockMemoryTimeoutMs = v); break; }
+                case Opcode.GET_STREAM_PERIOD:
+                { var v = ReadUInt32(payload); SetConfigValue(c => c.StreamPeriodMs = v); break; }
+                case Opcode.GET_SIGNAL_LOSS_BEHAVIOR:
+                { var v = payload.Length > 0 ? payload[0] : 0; SetConfigValue(c => c.SignalLossBehavior = v); break; }
+                case Opcode.GET_LOOP_ENABLE:
+                case Opcode.GET_MANUAL_MODE:
+                {
+                    bool v = payload.Length > 0 && payload[0] != 0;
+                    if (opcode == Opcode.GET_MANUAL_MODE)
+                    {
+                        SetConfigValue(c => c.ManualMode = v);
+                    }
+                    break;
+                }
+                case Opcode.GET_VOLTAGE:
+                    // Not part of the config snapshot (telemetry covers DAC V).
+                    break;
+
+                default:
+                    _logger.LogInformation("RX binary opcode 0x{Opcode:X4} ({Len} payload bytes)", opcode, payload.Length);
+                    break;
             }
 
             offset += consumed;
@@ -385,65 +405,19 @@ public sealed class SerialDeviceService : IDisposable
         }
     }
 
-    private void HandleAsciiLine(string line)
+    private void SetConfigValue(Action<DpllConfiguration> apply)
     {
-        // The firmware "gain" command prints a parseable status line:
-        //   Kp=0.000002 V/ns | Ki=0.000200 V/ns/s | Kd=0.000000 V/ns/s | center=1.65 V | target=0.0 ns | slew=30.0 V/s | manual=no | loop=20 ms | thr=500 ns | lockedV=1.650 V (default) | loss=0
-        if (!line.Contains("Kp=", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogDebug("ASCII: {Line}", line);
-            return;
-        }
-
-        try
-        {
-            var cfg = new DpllConfiguration();
-            foreach (var part in line.Split('|', StringSplitOptions.TrimEntries))
-            {
-                int eq = part.IndexOf('=');
-                if (eq < 0) continue;
-                string key = part[..eq].Trim();
-                string value = part[(eq + 1)..].Trim();
-
-                switch (key.ToLowerInvariant())
-                {
-                    case "kp": cfg.Kp = ParseDouble(value, "V/ns"); break;
-                    case "ki": cfg.Ki = ParseDouble(value, "V/ns/s"); break;
-                    case "kd": cfg.Kd = ParseDouble(value, "V/ns/s"); break;
-                    case "center": cfg.CenterVoltage = ParseDouble(value, "V"); break;
-                    case "target": cfg.TargetPhase = ParseDouble(value, "ns"); break;
-                    case "slew": cfg.MaxSlew = ParseDouble(value, "V/s"); break;
-                    case "manual": cfg.ManualMode = value.StartsWith("yes", StringComparison.OrdinalIgnoreCase); break;
-                    case "loop": cfg.LoopPeriodMs = (uint)ParseDouble(value, "ms"); break;
-                    case "thr": cfg.LockThresholdNs = ParseDouble(value, "ns"); break;
-                    case "hold": cfg.LockHoldCycles = (uint)ParseDouble(value, null); break;
-                    case "timeout": cfg.LockMemoryTimeoutMs = (uint)ParseDouble(value, "ms"); break;
-                    case "stream": cfg.StreamPeriodMs = (uint)ParseDouble(value, "ms"); break;
-                    case "lockedv": cfg.LockedCenterV = ParseDouble(value, "V"); cfg.HaveLockedCenter = !value.Contains("default", StringComparison.OrdinalIgnoreCase); break;
-                    case "loss": cfg.SignalLossBehavior = (int)ParseDouble(value, null); break;
-                }
-            }
-
-            _config = cfg;
-            _logger.LogDebug("Configuration parsed: Kp={Kp}, Ki={Ki}, center={Center} V, loop={Loop} ms",
-                cfg.Kp, cfg.Ki, cfg.CenterVoltage, cfg.LoopPeriodMs);
-            try { ConfigurationReceived?.Invoke(cfg); }
-            catch (Exception ex) { _logger.LogError(ex, "ConfigurationReceived handler threw."); }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning("Failed to parse firmware status line: {Line} ({Message})", line, ex.Message);
-        }
+        _config ??= new DpllConfiguration();
+        apply(_config);
+        try { ConfigurationReceived?.Invoke(_config); }
+        catch (Exception ex) { _logger.LogError(ex, "ConfigurationReceived handler threw."); }
     }
 
-    private static double ParseDouble(string value, string? unit)
-    {
-        if (!string.IsNullOrEmpty(unit) && value.EndsWith(unit, StringComparison.OrdinalIgnoreCase))
-        {
-            value = value[..^unit.Length].Trim();
-        }
-        return double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0;
-    }
+    private static float ReadFloat(ReadOnlySpan<byte> payload) =>
+        payload.Length >= 4 ? BinaryPrimitives.ReadSingleLittleEndian(payload) : 0f;
+
+    private static uint ReadUInt32(ReadOnlySpan<byte> payload) =>
+        payload.Length >= 4 ? BinaryPrimitives.ReadUInt32LittleEndian(payload) : 0u;
 
     // ------------------------------------------------------------------
     // Writing
@@ -483,88 +457,77 @@ public sealed class SerialDeviceService : IDisposable
         }
     }
 
-    /// <summary>Send a raw ASCII debug command line on the serial port.</summary>
-    public void SendAscii(string command)
+    /// <summary>
+    /// Ask the firmware for a fresh copy of every setting. The firmware answers
+    /// with one binary GET response per parameter, which <see cref="TryParsePackets"/>
+    /// folds into the configuration snapshot.
+    /// </summary>
+    public void RefreshConfiguration()
     {
-        if (_disposed || string.IsNullOrWhiteSpace(command))
-        {
-            return;
-        }
-        byte[] bytes = Encoding.ASCII.GetBytes(command.Trim() + "\r\n");
-        lock (_writeLock)
-        {
-            var p = _port;
-            if (p is null || !p.IsOpen)
-            {
-                _logger.LogDebug("ASCII write dropped: port not open ({Command})", command);
-                return;
-            }
-            try
-            {
-                p.Write(bytes, 0, bytes.Length);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("ASCII write failed: {Message}", ex.Message);
-            }
-        }
+        SendBinary(Opcode.GET_KP, default);
+        SendBinary(Opcode.GET_KI, default);
+        SendBinary(Opcode.GET_KD, default);
+        SendBinary(Opcode.GET_CENTER_VOLTAGE, default);
+        SendBinary(Opcode.GET_TARGET_PHASE, default);
+        SendBinary(Opcode.GET_MAX_SLEW, default);
+        SendBinary(Opcode.GET_LOOP_PERIOD, default);
+        SendBinary(Opcode.GET_LOCK_THRESHOLD, default);
+        SendBinary(Opcode.GET_LOCK_HOLD_CYCLES, default);
+        SendBinary(Opcode.GET_LOCK_MEMORY_TIMEOUT, default);
+        SendBinary(Opcode.GET_STREAM_PERIOD, default);
+        SendBinary(Opcode.GET_SIGNAL_LOSS_BEHAVIOR, default);
+        SendBinary(Opcode.GET_MANUAL_MODE, default);
     }
 
-    /// <summary>Request a fresh configuration dump from the firmware ("gain" command).</summary>
-    public void RefreshConfiguration() => SendAscii("gain");
-
     /// <summary>
-    /// Apply a set of configuration values.
-    /// <para>
-    /// Settings with a firmware ASCII command (Kp/Ki/Kd/center/target/slew/loop/
-    /// loss/manual/timeout) are sent as ASCII command lines. Settings that only
-    /// exist as binary opcodes in the firmware <c>Opcode.h</c> (lock threshold,
-    /// lock hold cycles, stream period) are sent as binary SET packets.
-    /// </para>
-    /// Afterwards the config is refreshed via the <c>gain</c> report.
+    /// Apply a set of configuration values. Every setting is sent as a binary
+    /// SET opcode — the firmware's ASCII console lives on a separate debug
+    /// UART, so the host must not write ASCII to this port.
+    /// Afterwards the config is refreshed via GET opcodes.
     /// </summary>
     public void ApplyConfiguration(DpllConfigurationPatch patch)
     {
-        if (patch.Kp.HasValue) SendAscii($"kp {FormatFloat(patch.Kp.Value)}");
-        if (patch.Ki.HasValue) SendAscii($"ki {FormatFloat(patch.Ki.Value)}");
-        if (patch.Kd.HasValue) SendAscii($"kd {FormatFloat(patch.Kd.Value)}");
-        if (patch.CenterVoltage.HasValue) SendAscii($"center {FormatFloat(patch.CenterVoltage.Value)}");
-        if (patch.TargetPhase.HasValue) SendAscii($"target {FormatFloat(patch.TargetPhase.Value)}");
-        if (patch.MaxSlew.HasValue) SendAscii($"slew {FormatFloat(patch.MaxSlew.Value)}");
-        if (patch.LoopPeriodMs.HasValue) SendAscii($"loop {patch.LoopPeriodMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
-        if (patch.LockMemoryTimeoutMs.HasValue) SendAscii($"timeout {patch.LockMemoryTimeoutMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
-        if (patch.SignalLossBehavior.HasValue) SendAscii($"loss {(int)patch.SignalLossBehavior.Value}");
-        if (patch.ManualMode.HasValue)
-        {
-            SendAscii(patch.ManualMode.Value ? "dac 1.65" : "run");
-        }
-
-        // Settings without an ASCII command — send as binary SET opcodes
-        // (handled by the firmware commandProccessor() switch in main.cpp).
+        if (patch.Kp.HasValue)
+            SendBinary(Opcode.SET_KP, DpllProtocol.EncodeFloat((float)patch.Kp.Value));
+        if (patch.Ki.HasValue)
+            SendBinary(Opcode.SET_KI, DpllProtocol.EncodeFloat((float)patch.Ki.Value));
+        if (patch.Kd.HasValue)
+            SendBinary(Opcode.SET_KD, DpllProtocol.EncodeFloat((float)patch.Kd.Value));
+        if (patch.CenterVoltage.HasValue)
+            SendBinary(Opcode.SET_CENTER_VOLTAGE, DpllProtocol.EncodeFloat((float)patch.CenterVoltage.Value));
+        if (patch.TargetPhase.HasValue)
+            SendBinary(Opcode.SET_TARGET_PHASE, DpllProtocol.EncodeFloat((float)patch.TargetPhase.Value));
+        if (patch.MaxSlew.HasValue)
+            SendBinary(Opcode.SET_MAX_SLEW, DpllProtocol.EncodeFloat((float)patch.MaxSlew.Value));
+        if (patch.LoopPeriodMs.HasValue)
+            SendBinary(Opcode.SET_LOOP_PERIOD, DpllProtocol.EncodeUInt32(patch.LoopPeriodMs.Value));
         if (patch.LockThresholdNs.HasValue)
             SendBinary(Opcode.SET_LOCK_THRESHOLD, DpllProtocol.EncodeFloat((float)patch.LockThresholdNs.Value));
         if (patch.LockHoldCycles.HasValue)
             SendBinary(Opcode.SET_LOCK_HOLD_CYCLES, DpllProtocol.EncodeUInt32(patch.LockHoldCycles.Value));
+        if (patch.LockMemoryTimeoutMs.HasValue)
+            SendBinary(Opcode.SET_LOCK_MEMORY_TIMEOUT, DpllProtocol.EncodeUInt32(patch.LockMemoryTimeoutMs.Value));
         if (patch.StreamPeriodMs.HasValue)
             SendBinary(Opcode.SET_STREAM_PERIOD, DpllProtocol.EncodeUInt32(patch.StreamPeriodMs.Value));
+        if (patch.SignalLossBehavior.HasValue)
+            SendBinary(Opcode.SET_SIGNAL_LOSS_BEHAVIOR, [(byte)patch.SignalLossBehavior.Value]);
+        if (patch.ManualMode.HasValue)
+            SendBinary(Opcode.SET_MANUAL_MODE, [patch.ManualMode.Value ? (byte)1 : (byte)0]);
 
         RefreshConfiguration();
     }
 
-    private static string FormatFloat(double value) =>
-        value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
-
     /// <summary>Reset the loop: clear integrator, restart from center, enable.</summary>
-    public void ResetLoop() => SendAscii("reset");
+    public void ResetLoop() => SendBinary(Opcode.RESET_LOOP, default);
 
     /// <summary>Shutdown the loop: DAC to 0 V, loop disabled.</summary>
-    public void ShutdownLoop() => SendAscii("dac 0.0");
+    public void ShutdownLoop() => SendBinary(Opcode.SHUTDOWN_LOOP, default);
 
     /// <summary>Manual DAC voltage (disables the loop).</summary>
-    public void SetManualVoltage(double volts) => SendAscii($"dac {FormatFloat(volts)}");
+    public void SetManualVoltage(double volts) => SendBinary(Opcode.SET_VOLTAGE, DpllProtocol.EncodeFloat((float)volts));
 
     /// <summary>Re-enable automatic control (manual mode off).</summary>
-    public void RunLoop() => SendAscii("run");
+    public void RunLoop() => SendBinary(Opcode.SET_ENABLE_LOOP, [1]);
 
     public void Dispose()
     {

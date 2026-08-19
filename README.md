@@ -4,14 +4,14 @@ Web-based data-acquisition and control UI for the **DPLL ultrasonic frequency-tr
 
 The application exposes a browser dashboard over **SignalR (WebSocket)** that shows live DPLL telemetry (reference frequency, phase error, DAC voltage, lock state), plots real-time trend charts, and lets you tune the digital PLL loop (Kp / Ki / Kd, center voltage, target phase, slew rate, loop period, signal-loss behavior) plus drive the DAC manually.
 
-> **Architecture note — one serial interface.** The firmware exposes a single serial console (USB CDC `SerialUSB`) that carries **both** traffic types:
+> **Architecture note — one binary serial interface.** The firmware exposes a single USB CDC serial port (`SerialUSB`) that carries **only binary opcode packets**:
 >
-> | Traffic | Protocol | Use |
+> | Direction | Protocol | Use |
 > |---|---|---|
-> | **Binary telemetry** | Opcode packets | Incoming 100 Hz `DPLL_STATUS` stream + enable/disable stream (`0x0017`) |
-> | **ASCII control** | Text command lines (`\r\n`) | All tuning commands (`kp`, `ki`, `center`, `dac`, …) and the `gain` report |
+> | Host → firmware | SET/GET opcodes | Tuning (`kp`/`ki`/`kd`/`center`/`target`/`slew`/`loop`/`loss`/`timeout`/`hold`/`thr`/`stream`), stream enable (`0x0017`), loop control |
+> | Firmware → host | GET responses + `0x0019` status | Configuration readback + 100 Hz `DPLL_STATUS` telemetry stream |
 >
-> The app manages **one serial port**. Incoming bytes are demultiplexed: printable ASCII bytes are accumulated into command lines, everything else (binary frame bytes — `0xAA` start marker, opcodes, float payloads, checksum) is fed to the packet parser. `\n` flushes pending packets and then processes the accumulated ASCII line.
+> The firmware's ASCII debug console runs on a **separate hardware UART** (`DebugPort`), so the host must never write ASCII to `SerialUSB` — every command and every readback is a binary opcode packet.
 
 ---
 
@@ -25,7 +25,7 @@ dotnet run --launch-profile http
 
 Open <http://localhost:5280> (HTTPS: <https://localhost:7264>).
 
-The app **auto-connects** to the port listed in `serial.json` as soon as it starts — there are no Connect/Disconnect buttons. It enables the 100 Hz telemetry stream and reads the current firmware configuration automatically.
+The app **auto-connects** to the port listed in `serial.json` as soon as it starts — there are no Connect/Disconnect buttons. It enables the telemetry stream and reads the current firmware configuration automatically (via binary GET opcodes).
 
 The connection badge shows `ONLINE · COM9` when the link is up. The port reconnects on its own with a 2 s retry while the app runs.
 
@@ -38,7 +38,7 @@ The serial port is configured in **`serial.json`** (in the project root), which 
 ```json
 {
   "Serial": {
-    "PortName": "COM9",          // Serial port — binary stream + ASCII commands (e.g. COM9)
+    "PortName": "COM9",          // Serial port — binary opcode stream (e.g. COM9)
     "BaudRate": 115200,          // 8N1
     "ReconnectDelayMs": 2000,    // auto-reconnect interval
     "StreamTimeoutMs": 1000      // stream freshness timeout
@@ -66,7 +66,7 @@ Frame layout (little-endian):
 | 8.. | payload (≤ 512 bytes) |
 | last | checksum — two's complement of payload bytes: `(byte)((sum ^ 0xFF) + 1)` |
 
-Host→firmware: `0x0017 SET_ALLOW_SEND_STREAM` (payload `1` = start streaming, `0` = stop).
+Host→firmware: `0x0017 SET_ALLOW_SEND_STREAM` (payload `1` = start streaming, `0` = stop). All configuration is sent with SET opcodes; readback is requested with GET opcodes.
 
 Firmware→host: `0x0019 STREAM_DPLL_STATUS` at the configured rate (`s_streamPeriodMs`, default 10 Hz). The 16-byte packed payload:
 
@@ -112,36 +112,7 @@ Host→firmware SET payloads use little-endian primitives:
 - `uint32` — 4 bytes LE (e.g. loop period, hold cycles, timeout, stream period)
 - `uint8` — 1 byte (bool / signal-loss behavior)
 
-### ASCII control
-
-Every line is terminated with `\r\n` and shares the same port as the binary stream. The app sends:
-
-| Command | Argument | Description |
-|---|---|---|
-| `kp <v>` | float | Proportional gain, V/ns |
-| `ki <v>` | float | Integral gain, V/ns/s |
-| `kd <v>` | float | Derivative gain, V/ns/s |
-| `center <v>` | float (0–3.3) | Center DAC voltage, V |
-| `target <ns>` | float | Target phase error, ns |
-| `slew <v/s>` | float | Max DAC slew rate, V/s |
-| `loop <ms>` | uint 1–1000 | Control loop period, ms |
-| `loss <n>` | 0 / 1 / 2 | Signal-loss behavior: 0=freeze, 1=center, 2=zero |
-| `gain` | — | Request configuration report (the app parses this to populate the form) |
-| `dac <v>` | float (0–3.3) | Manual DAC voltage — **disengages the loop** |
-| `reset` | — | Clear integrator, restart from center voltage, re-enable loop |
-| `run` | — | Re-enable automatic loop control |
-| `timeout <ms>` | uint | Lock-memory timeout |
-| `help` | — | List commands |
-
-> Note: lock threshold (`thr`), lock hold cycles (`hold`) and stream period (`stream`) have **no ASCII command** — the app sends them as binary SET opcodes (`0x001C`, `0x0020`, `0x0026`).
-
-`gain` response example:
-
-```
-Kp=0.000002 V/ns | Ki=0.000200 V/ns/s | Kd=0.000000 V/ns/s | center=1.65 V | target=0.0 ns | slew=30.0 V/s | manual=no | loop=20 ms | thr=500 ns | hold=10 | timeout=5000 ms | stream=100 ms | lockedV=1.650 V | loss=0
-```
-
-Default baseline: Kp=2e-6, Ki=2e-4, Kd=0, center=1.65 V, target=0 ns, slew=30 V/s, loop=20 ms, clamp 0–3.3 V, lock threshold 500 ns, lock hold cycles 10, lock-memory timeout 5000 ms, stream period 100 ms.
+GET responses (firmware→host) mirror the same payloads; the app folds them into the configuration snapshot after `RefreshConfiguration()`.
 
 ---
 
@@ -166,12 +137,12 @@ appsettings.json                # Fallback defaults for the Serial section
 Models/
   SerialOptions.cs              # Serial config binding
   DpllTelemetry.cs              # Decoded telemetry record
-  DpllConfiguration.cs          # Parsed "gain" report
+  DpllConfiguration.cs          # Firmware config snapshot (folded from GET responses)
   DpllConfigurationPatch.cs     # Partial-update DTO from the UI
 Protocol/
   DpllProtocol.cs               # Packet build/parse, checksum, opcodes, status decode
 Services/
-  SerialDeviceService.cs        # Single-port manager (demuxed binary telemetry + ASCII control)
+  SerialDeviceService.cs        # Single-port manager (binary opcode traffic)
 Hubs/
   DpllHub.cs                    # SignalR hub: /hubs/dpll
 wwwroot/
@@ -185,11 +156,11 @@ wwwroot/
 
 | Method (client→server) | Description |
 |---|---|
-| `SetStreamEnabled(bool)` | Enable/disable the 100 Hz stream |
-| `ApplyConfiguration(patch)` | Send tuning parameters over ASCII |
-| `RefreshConfiguration()` | Request `gain` report |
-| `ResetLoop()` / `RunLoop()` / `ShutdownLoop()` | ASCII `reset` / `run` / `dac 0.0` |
-| `SetManualVoltage(v)` | ASCII `dac <v>` |
+| `SetStreamEnabled(bool)` | Enable/disable the telemetry stream (`0x0017`) |
+| `ApplyConfiguration(patch)` | Send tuning parameters as binary SET opcodes |
+| `RefreshConfiguration()` | Request a config snapshot via binary GET opcodes |
+| `ResetLoop()` / `RunLoop()` / `ShutdownLoop()` | Binary `RESET_LOOP` / `SET_ENABLE_LOOP` / `SHUTDOWN_LOOP` |
+| `SetManualVoltage(v)` | Binary `SET_VOLTAGE` (`0x0014`) |
 
 Events (server→client): `Telemetry` (100 Hz), `Configuration`, `ConnectionState(code, port)`. Connection is managed entirely server-side from `serial.json` — the UI never opens/closes ports.
 

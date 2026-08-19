@@ -49,8 +49,24 @@ public sealed class SerialDeviceService : IDisposable
     private DpllTelemetry? _latest;
     private DpllConfiguration? _config;
     private DateTimeOffset _lastStreamAt;
-    private volatile bool _versionReplied;
     private volatile bool _disposed;
+
+    // Paced GET sequence: the firmware parses one frame per loop cycle, so we
+    // send ONE request and wait for its reply before sending the next. This
+    // keeps each burst tiny (never overflows the USB CDC RX buffer) and leaves
+    // the firmware control loop free to keep tracking.
+    private readonly object _pendingLock = new();
+    private readonly Dictionary<ushort, TaskCompletionSource> _pendingGets = new();
+
+    private static readonly ushort[] ConfigGetOpcodeOrder =
+    {
+        Opcode.GET_KP, Opcode.GET_KI, Opcode.GET_KD,
+        Opcode.GET_CENTER_VOLTAGE, Opcode.GET_TARGET_PHASE, Opcode.GET_MAX_SLEW,
+        Opcode.GET_LOOP_PERIOD, Opcode.GET_LOCK_THRESHOLD,
+        Opcode.GET_LOCK_HOLD_CYCLES, Opcode.GET_LOCK_MEMORY_TIMEOUT,
+        Opcode.GET_STREAM_PERIOD, Opcode.GET_SIGNAL_LOSS_BEHAVIOR,
+        Opcode.GET_MANUAL_MODE,
+    };
 
     public event Action<DpllTelemetry>? TelemetryReceived;
     public event Action<DeviceConnectionState, string?>? ConnectionChanged;
@@ -200,11 +216,10 @@ public sealed class SerialDeviceService : IDisposable
                 UpdateConnectionState();
 
                 // Ask firmware to start the telemetry stream, then pull the
-                // current configuration via binary GET opcodes, then probe
-                // the binary link with a GET_VERSION.
+                // current configuration via PACED GET requests (one at a time,
+                // each awaiting its reply), then probe the binary link.
                 EnableStream(true);
-                RefreshConfiguration();
-                ProbeFirmware();
+                _ = RunStartupSequenceAsync();
                 return;
             }
             catch (Exception ex)
@@ -363,7 +378,6 @@ public sealed class SerialDeviceService : IDisposable
                     if (len < 0) len = payload.Length;
                     var version = Encoding.ASCII.GetString(payload.Slice(0, len));
                     _logger.LogInformation("GET_VERSION reply received: '{Version}'", version);
-                    _versionReplied = true;
                     break;
                 }
 
@@ -413,6 +427,13 @@ public sealed class SerialDeviceService : IDisposable
                     break;
             }
 
+            // A paced GET waiter may be blocked on this reply — release it so
+            // the next request in the sequence is sent right away.
+            if (opcode == Opcode.GET_VERSION || Array.IndexOf(ConfigGetOpcodeOrder, opcode) >= 0)
+            {
+                CompletePendingGet(opcode);
+            }
+
             offset += consumed;
         }
 
@@ -448,23 +469,75 @@ public sealed class SerialDeviceService : IDisposable
     }
 
     /// <summary>
-    /// Send a GET_VERSION probe and log whether the firmware replies within a
-    /// short window. Used to confirm the binary link is alive after connect.
+    /// Ask the firmware for a fresh copy of every setting. Requests are PACED:
+    /// each GET is sent only after the previous reply arrived, so the USB CDC
+    /// RX buffer never has to hold a multi-packet burst.
     /// </summary>
-    public void ProbeFirmware()
-    {
-        _versionReplied = false;
-        SendBinary(Opcode.GET_VERSION, default);
+    public void RefreshConfiguration() => _ = RefreshConfigurationAsync();
 
-        const int timeoutMs = 3000;
-        _ = Task.Run(async () =>
+    private async Task RefreshConfigurationAsync()
+    {
+        foreach (var opcode in ConfigGetOpcodeOrder)
         {
-            await Task.Delay(timeoutMs).ConfigureAwait(false);
-            if (!_versionReplied)
+            if (_disposed)
             {
-                _logger.LogWarning("GET_VERSION: no reply within {Timeout} ms — firmware did not respond on the binary link.", timeoutMs);
+                break;
             }
-        });
+
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_pendingLock) { _pendingGets[opcode] = tcs; }
+
+            SendBinary(opcode, default);
+            try
+            {
+                await tcs.Task.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                lock (_pendingLock) { _pendingGets.Remove(opcode); }
+                _logger.LogWarning("GET 0x{Opcode:X4}: no reply within 500 ms — skipping.", opcode);
+            }
+        }
+    }
+
+    /// <summary>Send a GET_VERSION probe and log whether the firmware replies.</summary>
+    public void ProbeFirmware() => _ = ProbeFirmwareAsync();
+
+    private async Task ProbeFirmwareAsync()
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_pendingLock) { _pendingGets[Opcode.GET_VERSION] = tcs; }
+
+        SendBinary(Opcode.GET_VERSION, default);
+        try
+        {
+            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            lock (_pendingLock) { _pendingGets.Remove(Opcode.GET_VERSION); }
+            _logger.LogWarning("GET_VERSION: no reply within 3000 ms — firmware did not respond on the binary link.");
+        }
+    }
+
+    /// <summary>Release any paced GET waiter blocked on this opcode's reply.</summary>
+    private void CompletePendingGet(ushort opcode)
+    {
+        lock (_pendingLock)
+        {
+            if (_pendingGets.TryGetValue(opcode, out var tcs))
+            {
+                _pendingGets.Remove(opcode);
+                tcs.TrySetResult();
+            }
+        }
+    }
+
+    /// <summary>Run the connect-time query sequence: config refresh, then version probe.</summary>
+    private async Task RunStartupSequenceAsync()
+    {
+        await RefreshConfigurationAsync().ConfigureAwait(false);
+        await ProbeFirmwareAsync().ConfigureAwait(false);
     }
 
     /// <summary>Send a raw binary packet on the serial port.</summary>
@@ -495,32 +568,10 @@ public sealed class SerialDeviceService : IDisposable
     }
 
     /// <summary>
-    /// Ask the firmware for a fresh copy of every setting. The firmware answers
-    /// with one binary GET response per parameter, which <see cref="TryParsePackets"/>
-    /// folds into the configuration snapshot.
-    /// </summary>
-    public void RefreshConfiguration()
-    {
-        SendBinary(Opcode.GET_KP, default);
-        SendBinary(Opcode.GET_KI, default);
-        SendBinary(Opcode.GET_KD, default);
-        SendBinary(Opcode.GET_CENTER_VOLTAGE, default);
-        SendBinary(Opcode.GET_TARGET_PHASE, default);
-        SendBinary(Opcode.GET_MAX_SLEW, default);
-        SendBinary(Opcode.GET_LOOP_PERIOD, default);
-        SendBinary(Opcode.GET_LOCK_THRESHOLD, default);
-        SendBinary(Opcode.GET_LOCK_HOLD_CYCLES, default);
-        SendBinary(Opcode.GET_LOCK_MEMORY_TIMEOUT, default);
-        SendBinary(Opcode.GET_STREAM_PERIOD, default);
-        SendBinary(Opcode.GET_SIGNAL_LOSS_BEHAVIOR, default);
-        SendBinary(Opcode.GET_MANUAL_MODE, default);
-    }
-
-    /// <summary>
     /// Apply a set of configuration values. Every setting is sent as a binary
     /// SET opcode — the firmware's ASCII console lives on a separate debug
     /// UART, so the host must not write ASCII to this port.
-    /// Afterwards the config is refreshed via GET opcodes.
+    /// Afterwards the config is refreshed via paced GET opcodes.
     /// </summary>
     public void ApplyConfiguration(DpllConfigurationPatch patch)
     {

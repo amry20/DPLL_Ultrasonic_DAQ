@@ -23,7 +23,17 @@ var app = builder.Build();
 
 // --- Static web UI ---
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        // Prevent browser from caching JS/CSS — always fetch fresh copy.
+        var headers = ctx.Context.Response.Headers;
+        headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+        headers["Pragma"] = "no-cache";
+        headers["Expires"] = "0";
+    }
+});
 
 // --- Live telemetry hub ---
 app.MapHub<DpllHub>("/hubs/dpll");

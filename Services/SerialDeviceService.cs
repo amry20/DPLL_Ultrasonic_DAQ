@@ -350,9 +350,9 @@ public sealed class SerialDeviceService : IDisposable
             var span = buffer.AsSpan(offset);
             if (!DpllProtocol.TryParsePacket(span, out int consumed, out ushort opcode, out _, out ReadOnlySpan<byte> payload))
             {
-                if (consumed < 0)
+                if (consumed <= 0)
                 {
-                    break; // need more data
+                    break; // need more data (consumed == 0) or nothing useful
                 }
                 offset += consumed;
                 continue;

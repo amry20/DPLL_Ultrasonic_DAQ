@@ -290,10 +290,10 @@ select option { background: var(--bg-panel); }
   gap: 12px;
 }
 
-.field { display: flex; flex-direction: column; gap: 5px; }
-.field label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
-.field .unit { color: var(--text-mute); text-transform: none; letter-spacing: 0; }
-.field input, .field select { width: 100%; }
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.field .unit { color: var(--text-mute); text-transform: none; letter-spacing: 0; white-space: nowrap; }
+.field input, .field select { width: 100%; min-width: 0; }
 
 .control-actions {
   display: flex;

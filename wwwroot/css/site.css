@@ -335,11 +335,12 @@ select option { background: var(--bg-panel); }
 .log-panel {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 .log-panel .panel-head { flex-shrink: 0; }
 .log {
-  flex: 1;
-  min-height: 220px;
+  flex: 1 1 auto;
+  min-height: 220px; /* mobile: natural height with internal scroll */
   overflow-y: auto;
   background: var(--bg);
   border: 1px solid var(--border-soft);
@@ -348,6 +349,22 @@ select option { background: var(--bg-panel); }
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.7;
+}
+@media (min-width: 1100px) {
+  /* Desktop: pin the log to the panel so log content NEVER grows the grid
+     row. Absolute-positioned elements don't contribute to grid track size,
+     so the row height is set by the Controller panel alone, and both panels
+     end up exactly the same height. */
+  .log-panel { position: relative; }
+  .log-panel .panel-head { position: relative; z-index: 1; }
+  .log {
+    position: absolute;
+    top: 54px;   /* below the panel head (18px padding + 20px heading + 16px margin) */
+    right: 20px;
+    bottom: 18px;
+    left: 20px;
+    min-height: 0;
+  }
 }
 .log-line { display: flex; gap: 10px; padding: 1px 0; }
 .log-time { color: var(--text-mute); flex-shrink: 0; }

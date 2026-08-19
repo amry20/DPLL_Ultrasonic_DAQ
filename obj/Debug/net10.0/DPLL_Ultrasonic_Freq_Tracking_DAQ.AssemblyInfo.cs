@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("DPLL_Ultrasonic_Freq_Tracking_DAQ")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ddf1dac7342d7ca3af297991d0ce4c4a2213ce07")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b1b81cde6a6e6ff43fda60005a1e9fced48b5159")]
 [assembly: System.Reflection.AssemblyProductAttribute("DPLL_Ultrasonic_Freq_Tracking_DAQ")]
 [assembly: System.Reflection.AssemblyTitleAttribute("DPLL_Ultrasonic_Freq_Tracking_DAQ")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -84,15 +84,15 @@
       <div class="charts-grid">
         <div class="chart-box">
           <div class="chart-title">Frequency <span class="chart-unit">(Hz)</span></div>
-          <canvas id="freqChart"></canvas>
+          <div id="freqChart" class="echart-canvas"></div>
         </div>
         <div class="chart-box">
           <div class="chart-title">Phase Error <span class="chart-unit">(ns)</span></div>
-          <canvas id="phaseChart"></canvas>
+          <div id="phaseChart" class="echart-canvas"></div>
         </div>
         <div class="chart-box">
           <div class="chart-title">DAC Voltage <span class="chart-unit">(V)</span></div>
-          <canvas id="dacChart"></canvas>
+          <div id="dacChart" class="echart-canvas"></div>
         </div>
       </div>
     </section>
@@ -195,8 +195,8 @@
     <span>Serial protocol: binary opcodes + ASCII debug · Stream @ ~100 Hz</span>
   </footer>
 
-  <!-- Chart.js (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <!-- ECharts (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
   <!-- SignalR JS client (local bundle, see README for update instructions) -->
   <script src="js/signalr.js"></script>
   <script src="js/app.js"></script>

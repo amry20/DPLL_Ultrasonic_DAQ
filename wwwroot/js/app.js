@@ -20,12 +20,23 @@ const state = {
 };
 
 // ---------------- Chart config ----------------
-const CHART_POINTS = 300; // ~3 s at 100 Hz
+const CHART_POINTS = 600; // ~6 s at 100 Hz
 const SERIES = {
-  freq: { label: 'Frequency (Hz)', color: '#38bdf8', decimals: 2 },
-  phase: { label: 'Phase Error (ns)', color: '#fbbf24', decimals: 1 },
-  dac: { label: 'DAC Voltage (V)', color: '#34d399', decimals: 3 },
+  freq:  { label: 'Frequency (Hz)',    color: '#38bdf8', decimals: 2 },
+  phase: { label: 'Phase Error (ns)',  color: '#fbbf24', decimals: 1 },
+  dac:   { label: 'DAC Voltage (V)',   color: '#34d399', decimals: 3 },
 };
+
+// Ring-buffer for each series — avoids repeated Array.shift() at 100 Hz
+const _buf = {
+  ts:    new Array(CHART_POINTS).fill(''),
+  freq:  new Array(CHART_POINTS).fill(null),
+  phase: new Array(CHART_POINTS).fill(null),
+  dac:   new Array(CHART_POINTS).fill(null),
+};
+let _bufHead = 0;   // next write index
+let _bufCount = 0;  // how many valid samples
+let _rafPending = false;  // RAF scheduled?
 
 // ---------------- DOM refs ----------------
 const $ = (id) => document.getElementById(id);
@@ -129,10 +140,6 @@ function onTelemetry(t) {
   state.lastStreamAt = performance.now();
   state.sampleCount++;
   state.sampleWindowCount++;
-
-  if (state.sampleCount <= 3) {
-    console.log('[Telemetry sample]', JSON.stringify(t));
-  }
 
   if (state.sampleCount % 10 === 0) {
     const now = performance.now();
@@ -252,86 +259,120 @@ function setStreamBadge(cls, text) {
   els.streamBadgeText.textContent = text;
 }
 
-// ---------------- Charts ----------------
+// ---------------- Charts (ECharts + RAF batching) ----------------
+function makeChartOption(def) {
+  return {
+    animation: false,
+    backgroundColor: 'transparent',
+    grid: { top: 10, right: 12, bottom: 28, left: 54 },
+    xAxis: {
+      type: 'category',
+      data: [],
+      axisLine:  { lineStyle: { color: '#223042' } },
+      axisTick:  { lineStyle: { color: '#223042' } },
+      axisLabel: { color: '#5d6b7e', fontSize: 11,
+                   showMaxLabel: true, showMinLabel: false,
+                   interval: (i, v) => v !== '' && i % Math.ceil(CHART_POINTS / 6) === 0 },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      axisLine:  { show: false },
+      axisTick:  { show: false },
+      axisLabel: { color: '#8b9bb0', fontSize: 11,
+                   formatter: v => v.toFixed(def.decimals) },
+      splitLine: { lineStyle: { color: '#223042', type: 'dashed' } },
+    },
+    series: [{
+      type: 'line',
+      data: [],
+      symbol: 'none',
+      lineStyle: { color: def.color, width: 1.6 },
+      areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+                            colorStops: [{ offset: 0, color: def.color + '44' },
+                                         { offset: 1, color: def.color + '00' }] } },
+      sampling: 'lttb',
+    }],
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#121822',
+      borderColor: '#223042',
+      textStyle: { color: '#e6edf5', fontSize: 12 },
+      formatter: p => `${p[0].axisValue}<br/>${def.label}: <b>${p[0].value !== null ? Number(p[0].value).toFixed(def.decimals) : '—'}</b>`,
+    },
+  };
+}
+
 function initCharts() {
   state.charts = {};
-  for (const [key, def] of Object.entries(SERIES)) {
-    const ctx = $(`${key}Chart`).getContext('2d');
-    state.charts[key] = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: [],
-        datasets: [{
-          label: def.label,
-          data: [],
-          borderColor: def.color,
-          backgroundColor: def.color + '22',
-          borderWidth: 1.6,
-          pointRadius: 0,
-          tension: 0.2,
-          fill: true,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            displayColors: false,
-            callbacks: {
-              label: (item) => `${def.label}: ${fmt(item.parsed.y, def.decimals)}`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            ticks: { color: '#5d6b7e', maxTicksLimit: 6, maxRotation: 0 },
-            grid: { color: 'rgba(34,48,66,0.35)' },
-          },
-          y: {
-            ticks: { color: '#8b9bb0', callback: (v) => fmt(v, def.decimals) },
-            grid: { color: 'rgba(34,48,66,0.35)' },
-          },
-        },
-      },
-    });
+  const defs = { freq: SERIES.freq, phase: SERIES.phase, dac: SERIES.dac };
+  for (const [key, def] of Object.entries(defs)) {
+    const dom = document.getElementById(`${key}Chart`);
+    const ec = echarts.init(dom, null, { renderer: 'canvas', useDirtyRect: true });
+    ec.setOption(makeChartOption(def));
+    state.charts[key] = ec;
   }
+  // resize all charts when window resizes
+  window.addEventListener('resize', () => {
+    for (const ec of Object.values(state.charts)) ec.resize();
+  });
+}
+
+function _flushCharts() {
+  _rafPending = false;
+  if (state.paused) return;
+
+  // Build ordered arrays from the ring buffer
+  const len = Math.min(_bufCount, CHART_POINTS);
+  const start = _bufCount < CHART_POINTS ? 0 : _bufHead;
+  const ts    = new Array(len);
+  const freq  = new Array(len);
+  const phase = new Array(len);
+  const dac   = new Array(len);
+  for (let i = 0; i < len; i++) {
+    const idx = (start + i) % CHART_POINTS;
+    ts[i]    = _buf.ts[idx];
+    freq[i]  = _buf.freq[idx];
+    phase[i] = _buf.phase[idx];
+    dac[i]   = _buf.dac[idx];
+  }
+
+  state.charts.freq.setOption( { xAxis: { data: ts }, series: [{ data: freq  }] }, false, true);
+  state.charts.phase.setOption({ xAxis: { data: ts }, series: [{ data: phase }] }, false, true);
+  state.charts.dac.setOption(  { xAxis: { data: ts }, series: [{ data: dac   }] }, false, true);
 }
 
 function updateCharts(t) {
   if (state.paused) return;
+
+  // Write into ring buffer
   const now = new Date();
-  const label = now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
-  const chart = state.charts;
+  const label = now.toLocaleTimeString('en-GB', { hour12: false }) +
+                '.' + String(now.getMilliseconds()).padStart(3, '0');
+  _buf.ts[_bufHead]    = label;
+  _buf.freq[_bufHead]  = t.ReferenceFrequencyHz;
+  _buf.phase[_bufHead] = t.PhaseErrorNs;
+  _buf.dac[_bufHead]   = t.DACVoltage_V;
+  _bufHead = (_bufHead + 1) % CHART_POINTS;
+  if (_bufCount < CHART_POINTS) _bufCount++;
 
-  for (const k of Object.keys(SERIES)) {
-    chart[k].data.labels.push(label);
+  // Schedule a single RAF render (deduplicated)
+  if (!_rafPending) {
+    _rafPending = true;
+    requestAnimationFrame(_flushCharts);
   }
-  chart.freq.data.datasets[0].data.push(t.ReferenceFrequencyHz);
-  chart.phase.data.datasets[0].data.push(t.PhaseErrorNs);
-  chart.dac.data.datasets[0].data.push(t.DACVoltage_V);
-
-  if (chart.freq.data.labels.length > CHART_POINTS) {
-    for (const k of Object.keys(SERIES)) {
-      chart[k].data.labels.shift();
-      chart[k].data.datasets[0].data.shift();
-    }
-  }
-
-  chart.freq.update('none');
-  chart.phase.update('none');
-  chart.dac.update('none');
 }
 
 function clearCharts() {
-  for (const k of Object.keys(SERIES)) {
-    state.charts[k].data.labels = [];
-    state.charts[k].data.datasets[0].data = [];
-    state.charts[k].update('none');
-  }
+  _buf.ts.fill(''); _buf.freq.fill(null);
+  _buf.phase.fill(null); _buf.dac.fill(null);
+  _bufHead = 0; _bufCount = 0;
+  state.charts.freq.setOption( { xAxis: { data: [] }, series: [{ data: [] }] });
+  state.charts.phase.setOption({ xAxis: { data: [] }, series: [{ data: [] }] });
+  state.charts.dac.setOption(  { xAxis: { data: [] }, series: [{ data: [] }] });
   log('info', 'Charts cleared');
+}
 }
 
 // ---------------- Stream freshness watchdog ----------------

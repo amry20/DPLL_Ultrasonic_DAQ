@@ -281,7 +281,7 @@ select option { background: var(--bg-panel); }
 }
 .chart-title { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
 .chart-unit { color: var(--text-mute); text-transform: none; }
-.chart-box canvas { height: 240px !important; }
+.echart-canvas { height: 220px; width: 100%; }
 
 /* ---------------- Config ---------------- */
 .config-grid {

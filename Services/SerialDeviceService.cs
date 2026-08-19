@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Ports;
+using System.Text;
 using DPLL_Ultrasonic_DAQ.Models;
 using DPLL_Ultrasonic_DAQ.Protocol;
 using Microsoft.Extensions.Options;
@@ -48,6 +49,7 @@ public sealed class SerialDeviceService : IDisposable
     private DpllTelemetry? _latest;
     private DpllConfiguration? _config;
     private DateTimeOffset _lastStreamAt;
+    private volatile bool _versionReplied;
     private volatile bool _disposed;
 
     public event Action<DpllTelemetry>? TelemetryReceived;
@@ -198,9 +200,11 @@ public sealed class SerialDeviceService : IDisposable
                 UpdateConnectionState();
 
                 // Ask firmware to start the telemetry stream, then pull the
-                // current configuration via binary GET opcodes.
+                // current configuration via binary GET opcodes, then probe
+                // the binary link with a GET_VERSION.
                 EnableStream(true);
                 RefreshConfiguration();
+                ProbeFirmware();
                 return;
             }
             catch (Exception ex)
@@ -350,6 +354,19 @@ public sealed class SerialDeviceService : IDisposable
                     break;
                 }
 
+                case Opcode.GET_VERSION:
+                {
+                    // The firmware answers with the version string as a
+                    // null-terminated ASCII payload (e.g. "DPLL v1.0\0").
+                    // Read up to the '\0' so trailing garbage is ignored.
+                    int len = payload.IndexOf((byte)0);
+                    if (len < 0) len = payload.Length;
+                    var version = Encoding.ASCII.GetString(payload.Slice(0, len));
+                    _logger.LogInformation("GET_VERSION reply received: '{Version}'", version);
+                    _versionReplied = true;
+                    break;
+                }
+
                 // --- GET responses: fold each value into the config snapshot ---
                 // (Read the span into locals first — a ref struct cannot be
                 // captured by the SetConfigValue lambda.)
@@ -428,6 +445,26 @@ public sealed class SerialDeviceService : IDisposable
     {
         _streamEnabled = enable;
         SendBinary(Opcode.SET_ALLOW_SEND_STREAM, [enable ? (byte)1 : (byte)0]);
+    }
+
+    /// <summary>
+    /// Send a GET_VERSION probe and log whether the firmware replies within a
+    /// short window. Used to confirm the binary link is alive after connect.
+    /// </summary>
+    public void ProbeFirmware()
+    {
+        _versionReplied = false;
+        SendBinary(Opcode.GET_VERSION, default);
+
+        const int timeoutMs = 3000;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(timeoutMs).ConfigureAwait(false);
+            if (!_versionReplied)
+            {
+                _logger.LogWarning("GET_VERSION: no reply within {Timeout} ms — firmware did not respond on the binary link.", timeoutMs);
+            }
+        });
     }
 
     /// <summary>Send a raw binary packet on the serial port.</summary>

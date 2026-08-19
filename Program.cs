@@ -12,7 +12,11 @@ builder.Services.Configure<SerialOptions>(builder.Configuration.GetSection(Seria
 
 // --- Services ---
 builder.Services.AddSingleton<SerialDeviceService>();
-builder.Services.AddSignalR();
+builder.Services.AddSignalR().AddJsonProtocol(options =>
+{
+    // The JS client reads PascalCase property names (cfg.Kp, t.ReferenceFrequencyHz).
+    options.PayloadSerializerOptions.PropertyNamingPolicy = null;
+});
 
 var app = builder.Build();
 

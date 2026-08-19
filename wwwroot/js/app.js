@@ -130,6 +130,10 @@ function onTelemetry(t) {
   state.sampleCount++;
   state.sampleWindowCount++;
 
+  if (state.sampleCount <= 3) {
+    console.log('[Telemetry sample]', JSON.stringify(t));
+  }
+
   if (state.sampleCount % 10 === 0) {
     const now = performance.now();
     const elapsed = (now - state.sampleWindowStart) / 1000;

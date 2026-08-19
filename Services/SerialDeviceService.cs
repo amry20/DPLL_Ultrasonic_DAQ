@@ -309,6 +309,8 @@ public sealed class SerialDeviceService : IDisposable
                     continue;
                 }
 
+                _logger.LogDebug("RX {N} bytes: {Hex}", n, Convert.ToHexString(chunk, 0, n));
+
                 for (int i = 0; i < n; i++)
                 {
                     _rxBuffer.Add(chunk[i]);
@@ -317,7 +319,7 @@ public sealed class SerialDeviceService : IDisposable
                     // buffer so it cannot grow without limit.
                     if (_rxBuffer.Count > DpllProtocol.MaxPacketSize)
                     {
-                        _logger.LogDebug("Binary buffer overflowed ({Count} bytes) — dropping as invalid frame", _rxBuffer.Count);
+                        _logger.LogWarning("Binary buffer overflowed ({Count} bytes) — dropping as invalid frame", _rxBuffer.Count);
                         _rxBuffer.Clear();
                     }
                 }
@@ -357,6 +359,8 @@ public sealed class SerialDeviceService : IDisposable
                 offset += consumed;
                 continue;
             }
+
+            _logger.LogDebug("Parsed opcode 0x{Op:X4} payload {Len} bytes", opcode, payload.Length);
 
             switch (opcode)
             {
@@ -423,13 +427,21 @@ public sealed class SerialDeviceService : IDisposable
                     // Not part of the config snapshot (telemetry covers DAC V).
                     break;
 
+                case Opcode.GET_ALLOW_SEND_STREAM:
+                {
+                    bool streamOn = payload.Length > 0 && payload[0] != 0;
+                    _logger.LogInformation("Stream ACK from firmware: allowed={StreamOn}", streamOn);
+                    CompletePendingGet(opcode);
+                    break;
+                }
+
                 default:
                     _logger.LogInformation("RX binary opcode 0x{Opcode:X4} ({Len} payload bytes)", opcode, payload.Length);
                     break;
             }
 
-            // A paced GET waiter may be blocked on this reply — release it so
-            // the next request in the sequence is sent right away.
+            // A paced GET/SET-ACK waiter may be blocked on this reply — release it.
+            // GET_ALLOW_SEND_STREAM handled its own CompletePendingGet in its case above.
             if (opcode == Opcode.GET_VERSION || Array.IndexOf(ConfigGetOpcodeOrder, opcode) >= 0)
             {
                 CompletePendingGet(opcode);
@@ -462,11 +474,25 @@ public sealed class SerialDeviceService : IDisposable
     // Writing
     // ------------------------------------------------------------------
 
-    /// <summary>Enable or disable the firmware telemetry stream (opcode 0x0017).</summary>
-    public void EnableStream(bool enable)
+    /// <summary>Enable or disable the firmware telemetry stream (opcode 0x0017).
+    /// Returns true when firmware confirms the state change via GET_ALLOW_SEND_STREAM reply.</summary>
+    public void EnableStream(bool enable) => _ = EnableStreamAsync(enable);
+
+    private async Task EnableStreamAsync(bool enable)
     {
         _streamEnabled = enable;
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_pendingLock) { _pendingGets[Opcode.GET_ALLOW_SEND_STREAM] = tcs; }
         SendBinary(Opcode.SET_ALLOW_SEND_STREAM, [enable ? (byte)1 : (byte)0]);
+        try
+        {
+            await tcs.Task.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            lock (_pendingLock) { _pendingGets.Remove(Opcode.GET_ALLOW_SEND_STREAM); }
+            _logger.LogWarning("SET_ALLOW_SEND_STREAM: no ACK from firmware within 500 ms.");
+        }
     }
 
     /// <summary>
@@ -579,7 +605,7 @@ public sealed class SerialDeviceService : IDisposable
             // 3) Telemetry stream — last, so firmware stays idle during the queries.
             if (!_disposed)
             {
-                EnableStream(true);
+                await EnableStreamAsync(true).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (!_disposed)

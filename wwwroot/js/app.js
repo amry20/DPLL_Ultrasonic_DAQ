@@ -373,7 +373,6 @@ function clearCharts() {
   state.charts.dac.setOption(  { xAxis: { data: [] }, series: [{ data: [] }] });
   log('info', 'Charts cleared');
 }
-}
 
 // ---------------- Stream freshness watchdog ----------------
 setInterval(() => {

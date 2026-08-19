@@ -302,14 +302,16 @@ function updateCharts(t) {
   const label = now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
   const chart = state.charts;
 
-  chart.freq.data.labels.push(label);
+  for (const k of Object.keys(SERIES)) {
+    chart[k].data.labels.push(label);
+  }
   chart.freq.data.datasets[0].data.push(t.ReferenceFrequencyHz);
   chart.phase.data.datasets[0].data.push(t.PhaseErrorNs);
   chart.dac.data.datasets[0].data.push(t.DACVoltage_V);
 
   if (chart.freq.data.labels.length > CHART_POINTS) {
-    chart.freq.data.labels.shift();
     for (const k of Object.keys(SERIES)) {
+      chart[k].data.labels.shift();
       chart[k].data.datasets[0].data.shift();
     }
   }

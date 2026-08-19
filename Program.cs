@@ -1,6 +1,7 @@
 using DPLL_Ultrasonic_DAQ.Hubs;
 using DPLL_Ultrasonic_DAQ.Models;
 using DPLL_Ultrasonic_DAQ.Services;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,8 +30,18 @@ app.MapHub<DpllHub>("/hubs/dpll");
 
 // --- Auto-connect to the ports configured in serial.json ---
 var device = app.Services.GetRequiredService<SerialDeviceService>();
+var hubContext = app.Services.GetRequiredService<IHubContext<DpllHub>>();
+
 app.Lifetime.ApplicationStarted.Register(() =>
 {
+    // Broadcast every telemetry frame to all connected SignalR clients.
+    device.TelemetryReceived += telemetry =>
+        hubContext.Clients.All.SendAsync("Telemetry", telemetry);
+
+    // Broadcast config snapshots (e.g. after a GET refresh).
+    device.ConfigurationReceived += config =>
+        hubContext.Clients.All.SendAsync("Configuration", config);
+
     try
     {
         device.Start();

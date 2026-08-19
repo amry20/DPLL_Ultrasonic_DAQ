@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DPLL Ultrasonic Frequency Tracking — DAQ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/site.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12h4l2-7 4 14 3-9 2 2h5"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>DPLL Ultrasonic DAQ</h1>
+        <span class="brand-sub">Frequency Tracking · Resonance Lock Monitor</span>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <div id="streamBadge" class="badge badge-muted" title="Telemetry stream freshness">
+        <span class="dot"></span><span id="streamBadgeText">NO DATA</span>
+      </div>
+      <div id="connBadge" class="badge badge-muted" title="Connection status — ports from serial.json">
+        <span class="dot"></span><span id="connBadgeText">OFFLINE</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ======================= Live status ======================= -->
+    <section class="panel status-panel">
+      <div class="panel-head">
+        <h2>Live Status</h2>
+        <div class="lock-indicator" id="lockIndicator">
+          <span class="lock-ring"></span>
+          <span id="lockStateText">NO SIGNAL</span>
+        </div>
+      </div>
+      <div class="status-grid">
+        <div class="gauge">
+          <div class="gauge-label">Reference Frequency</div>
+          <div class="gauge-value mono" id="freqValue">—</div>
+          <div class="gauge-unit" id="freqUnit">Hz</div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">Phase Error</div>
+          <div class="gauge-value mono" id="phaseValue">—</div>
+          <div class="gauge-unit" id="phaseUnit">ns</div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">DAC Voltage</div>
+          <div class="gauge-value mono" id="dacValue">—</div>
+          <div class="gauge-unit" id="dacUnit">V</div>
+        </div>
+        <div class="gauge">
+          <div class="gauge-label">Loop Period</div>
+          <div class="gauge-value mono" id="loopValue">—</div>
+          <div class="gauge-unit" id="loopUnit">ms</div>
+        </div>
+      </div>
+      <div class="status-foot">
+        <span class="stale-flag" id="staleFlag" hidden>⚠ phase stale (ZCD absent — holding last valid value)</span>
+        <span class="manual-flag" id="manualFlag" hidden>⏸ manual mode — loop disengaged</span>
+      </div>
+    </section>
+
+    <!-- ======================= Charts ======================= -->
+    <section class="panel charts-panel">
+      <div class="panel-head">
+        <h2>Trends</h2>
+        <div class="chart-controls">
+          <span class="chip" id="sampleRateChip">0 Hz</span>
+          <button id="pauseBtn" class="btn btn-ghost">Pause</button>
+          <button id="clearBtn" class="btn btn-ghost">Clear</button>
+        </div>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-box">
+          <div class="chart-title">Frequency <span class="chart-unit">(Hz)</span></div>
+          <canvas id="freqChart"></canvas>
+        </div>
+        <div class="chart-box">
+          <div class="chart-title">Phase Error <span class="chart-unit">(ns)</span></div>
+          <canvas id="phaseChart"></canvas>
+        </div>
+        <div class="chart-box">
+          <div class="chart-title">DAC Voltage <span class="chart-unit">(V)</span></div>
+          <canvas id="dacChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= Control & config ======================= -->
+    <section class="panel control-panel">
+      <div class="panel-head">
+        <h2>Controller</h2>
+        <button id="refreshCfgBtn" class="btn btn-ghost" title="Re-read configuration from firmware">↻ Read config</button>
+      </div>
+
+      <div class="config-grid">
+        <div class="field">
+          <label for="kpInput">Kp <span class="unit">(V/ns)</span></label>
+          <input id="kpInput" type="number" step="0.0000001" min="0" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="kiInput">Ki <span class="unit">(V/ns/s)</span></label>
+          <input id="kiInput" type="number" step="0.0000001" min="0" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="kdInput">Kd <span class="unit">(V/ns/s)</span></label>
+          <input id="kdInput" type="number" step="0.0000001" min="0" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="centerInput">Center <span class="unit">(V)</span></label>
+          <input id="centerInput" type="number" step="0.01" min="0" max="3.3" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="targetInput">Target <span class="unit">(ns)</span></label>
+          <input id="targetInput" type="number" step="1" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="slewInput">Slew <span class="unit">(V/s)</span></label>
+          <input id="slewInput" type="number" step="0.1" min="0.1" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="loopInput">Loop <span class="unit">(ms)</span></label>
+          <input id="loopInput" type="number" step="1" min="1" max="1000" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="thrInput">Lock threshold <span class="unit">(ns)</span></label>
+          <input id="thrInput" type="number" step="1" min="0" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="holdInput">Lock hold cycles</label>
+          <input id="holdInput" type="number" step="1" min="1" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="timeoutInput">Lock timeout <span class="unit">(ms)</span></label>
+          <input id="timeoutInput" type="number" step="1" min="0" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="streamInput">Stream period <span class="unit">(ms)</span></label>
+          <input id="streamInput" type="number" step="1" min="1" max="65535" placeholder="—" />
+        </div>
+        <div class="field">
+          <label for="lossInput">Signal-loss behavior</label>
+          <select id="lossInput">
+            <option value="0">Freeze</option>
+            <option value="1">Center</option>
+            <option value="2">Zero</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="control-actions">
+        <button id="applyCfgBtn" class="btn btn-primary" disabled>Apply configuration</button>
+        <button id="resetLoopBtn" class="btn btn-warn">Reset loop</button>
+        <button id="runLoopBtn" class="btn btn-success">Run loop</button>
+        <button id="shutdownBtn" class="btn btn-danger">Shutdown (0 V)</button>
+      </div>
+
+      <div class="manual-box">
+        <div class="manual-head">
+          <span>Manual DAC control</span>
+          <span class="manual-value mono" id="manualDacValue">0.00 V</span>
+        </div>
+        <input id="manualDacSlider" type="range" min="0" max="3.3" step="0.01" value="0" disabled />
+        <div class="manual-foot">
+          <button id="manualSetBtn" class="btn btn-warn" disabled>Set manual voltage</button>
+          <span class="hint">Setting a manual voltage disengages the loop.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= Log ======================= -->
+    <section class="panel log-panel">
+      <div class="panel-head">
+        <h2>Event Log</h2>
+        <button id="clearLogBtn" class="btn btn-ghost">Clear</button>
+      </div>
+      <div id="log" class="log" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>DPLL Ultrasonic Frequency Tracking DAQ</span>
+    <span class="footer-sep">·</span>
+    <span>Serial protocol: binary opcodes + ASCII debug · Stream @ ~100 Hz</span>
+  </footer>
+
+  <!-- Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <!-- SignalR JS client (local bundle, see README for update instructions) -->
+  <script src="js/signalr.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

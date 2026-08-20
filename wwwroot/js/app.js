@@ -228,6 +228,7 @@ function setUiConnected(connected) {
   els.applyCfgBtn.disabled = !connected || !state.config;
   els.manualDacSlider.disabled = !connected;
   els.manualSetBtn.disabled = !connected;
+  els.startLogBtn.disabled = !connected || state.logging;
   if (!connected) {
     state.telemetry = null;
     els.freqValue.textContent = '—';
@@ -502,6 +503,7 @@ els.clearLogBtn.addEventListener('click', () => { els.log.innerHTML = ''; });
 // ---------------- Logging control ----------------
 function setLoggingUi(active, file, rows) {
   els.startLogBtn.hidden = active;
+  els.startLogBtn.disabled = active || !state.connected;
   els.stopLogBtn.hidden = !active;
   els.logChip.hidden = !active;
   if (active) {

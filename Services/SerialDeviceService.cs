@@ -66,6 +66,7 @@ public sealed class SerialDeviceService : IDisposable
         Opcode.GET_LOCK_HOLD_CYCLES, Opcode.GET_LOCK_MEMORY_TIMEOUT,
         Opcode.GET_STREAM_PERIOD, Opcode.GET_SIGNAL_LOSS_BEHAVIOR,
         Opcode.GET_MANUAL_MODE,
+        Opcode.GET_GENERATOR_SOURCE, Opcode.GET_DDS_FREQ_BOUNDS, Opcode.GET_DDS_CENTER_FREQ,
     };
 
     public event Action<DpllTelemetry>? TelemetryReceived;
@@ -424,6 +425,28 @@ public sealed class SerialDeviceService : IDisposable
                     }
                     break;
                 }
+                case Opcode.GET_GENERATOR_SOURCE:
+                {
+                    int src = payload.Length > 0 ? payload[0] : 0;
+                    SetConfigValue(c => c.GeneratorSource = src);
+                    break;
+                }
+                case Opcode.GET_DDS_FREQ_BOUNDS:
+                {
+                    if (payload.Length >= 8)
+                    {
+                        var minF = ReadFloat(payload.Slice(0, 4));
+                        var maxF = ReadFloat(payload.Slice(4, 4));
+                        SetConfigValue(c => { c.DdsMinFreq = minF; c.DdsMaxFreq = maxF; });
+                    }
+                    break;
+                }
+                case Opcode.GET_DDS_CENTER_FREQ:
+                {
+                    var v = ReadFloat(payload);
+                    SetConfigValue(c => c.DdsCenterFreq = v);
+                    break;
+                }
                 case Opcode.GET_VOLTAGE:
                     // Not part of the config snapshot (telemetry covers DAC V).
                     break;
@@ -705,6 +728,19 @@ public sealed class SerialDeviceService : IDisposable
             SendBinary(Opcode.SET_SIGNAL_LOSS_BEHAVIOR, [(byte)patch.SignalLossBehavior.Value]);
         if (patch.ManualMode.HasValue)
             SendBinary(Opcode.SET_MANUAL_MODE, [patch.ManualMode.Value ? (byte)1 : (byte)0]);
+        if (patch.GeneratorSource.HasValue)
+            SendBinary(Opcode.SET_GENERATOR_SOURCE, [(byte)patch.GeneratorSource.Value]);
+        if (patch.DdsCenterFreq.HasValue)
+            SendBinary(Opcode.SET_DDS_CENTER_FREQ, DpllProtocol.EncodeFloat((float)patch.DdsCenterFreq.Value));
+        if (patch.DdsMinFreq.HasValue || patch.DdsMaxFreq.HasValue)
+        {
+            float minF = (float)(patch.DdsMinFreq ?? _config?.DdsMinFreq ?? 20000.0);
+            float maxF = (float)(patch.DdsMaxFreq ?? _config?.DdsMaxFreq ?? 40000.0);
+            byte[] bounds = new byte[8];
+            BinaryPrimitives.WriteSingleLittleEndian(bounds.AsSpan(0, 4), minF);
+            BinaryPrimitives.WriteSingleLittleEndian(bounds.AsSpan(4, 4), maxF);
+            SendBinary(Opcode.SET_DDS_FREQ_BOUNDS, bounds);
+        }
 
         RefreshConfiguration();
     }
@@ -717,6 +753,9 @@ public sealed class SerialDeviceService : IDisposable
 
     /// <summary>Manual DAC voltage (disables the loop).</summary>
     public void SetManualVoltage(double volts) => SendBinary(Opcode.SET_VOLTAGE, DpllProtocol.EncodeFloat((float)volts));
+
+    /// <summary>Manual DDS output frequency (disables the loop).</summary>
+    public void SetManualFrequency(double freqHz) => SendBinary(Opcode.SET_DDS_MANUAL_FREQ, DpllProtocol.EncodeFloat((float)freqHz));
 
     /// <summary>Re-enable automatic control (manual mode off).</summary>
     public void RunLoop() => SendBinary(Opcode.SET_ENABLE_LOOP, [1]);

@@ -27,6 +27,18 @@ public sealed class DpllTelemetry
     /// <summary>True when external EEPROM 24LC16B is detected and responding on I2C.</summary>
     public bool IsEepromOk => EepromStatus == 1;
 
+    /// <summary>0 = Error/Uninitialized, 1 = Ready/OK (Clock & SPI running), 2 = Signal Verified on PA0.</summary>
+    public int DdsStatus { get; set; }
+
+    /// <summary>True when AD9833 DDS is initialized and ready.</summary>
+    public bool IsDdsOk => (DdsStatus & 0x7F) >= 1;
+
+    /// <summary>True when AD9833 output signal is physically verified on PA0.</summary>
+    public bool IsDdsSignalVerified => (DdsStatus & 0x7F) == 2;
+
+    /// <summary>True when DDS AD9833 is selected as active DPLL generator source (bit 7).</summary>
+    public bool IsDdsActiveGenerator => (DdsStatus & 0x80) != 0;
+
     /// <summary>Seconds since the Unix epoch (UTC) when this sample was captured by the host.</summary>
     public double Timestamp { get; set; }
 

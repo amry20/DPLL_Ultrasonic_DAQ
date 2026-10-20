@@ -59,4 +59,19 @@ public sealed class DpllConfiguration
         2 => "Zero",
         _ => "Unknown"
     };
+
+    /// <summary>Generator source: 0 = DAC (CD4046 VCO), 1 = DDS (AD9833).</summary>
+    public int GeneratorSource { get; set; }
+
+    /// <summary>True when DDS AD9833 is selected as generator source.</summary>
+    public bool IsDdsMode => GeneratorSource == 1;
+
+    /// <summary>DDS center nominal frequency in Hz.</summary>
+    public double DdsCenterFreq { get; set; } = 28000.0;
+
+    /// <summary>DDS minimum allowable frequency in Hz.</summary>
+    public double DdsMinFreq { get; set; } = 20000.0;
+
+    /// <summary>DDS maximum allowable frequency in Hz.</summary>
+    public double DdsMaxFreq { get; set; } = 40000.0;
 }

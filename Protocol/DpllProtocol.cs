@@ -48,6 +48,14 @@ public static class Opcode
     public const ushort GET_EEPROM_STATUS = 0x0028;
     public const ushort SAVE_CONFIG_EEPROM = 0x0029;
     public const ushort LOAD_CONFIG_EEPROM = 0x002A;
+    public const ushort SET_GENERATOR_SOURCE = 0x002B;
+    public const ushort GET_GENERATOR_SOURCE = 0x002C;
+    public const ushort SET_DDS_FREQ_BOUNDS = 0x002D;
+    public const ushort GET_DDS_FREQ_BOUNDS = 0x002E;
+    public const ushort SET_DDS_CENTER_FREQ = 0x002F;
+    public const ushort GET_DDS_CENTER_FREQ = 0x0030;
+    public const ushort SET_DDS_MANUAL_FREQ = 0x0031;
+    public const ushort GET_DDS_MANUAL_FREQ = 0x0032;
 }
 
 /// <summary>
@@ -191,6 +199,7 @@ public static class DpllProtocol
             LockStatus = payload.Length > 12 ? payload[12] : 0,
             PhaseStale = payload.Length > 13 ? payload[13] : 0,
             EepromStatus = payload.Length > 14 ? payload[14] : 0,
+            DdsStatus = payload.Length > 15 ? payload[15] : 0,
             Timestamp = timestamp.ToUnixTimeSeconds() + timestamp.Millisecond / 1000.0
         };
         return t;

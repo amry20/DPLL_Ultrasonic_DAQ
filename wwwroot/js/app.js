@@ -47,6 +47,8 @@ const els = {
   connBadgeText: $('connBadgeText'),
   eepromBadge: $('eepromBadge'),
   eepromBadgeText: $('eepromBadgeText'),
+  ddsBadge: $('ddsBadge'),
+  ddsBadgeText: $('ddsBadgeText'),
   streamBadge: $('streamBadge'),
   streamBadgeText: $('streamBadgeText'),
   lockIndicator: $('lockIndicator'),
@@ -67,6 +69,17 @@ const els = {
   applyCfgBtn: $('applyCfgBtn'),
   saveCfgBtn: $('saveCfgBtn'),
   loadCfgBtn: $('loadCfgBtn'),
+  generatorSourceInput: $('generatorSourceInput'),
+  ddsCenterInput: $('ddsCenterInput'),
+  ddsMinInput: $('ddsMinInput'),
+  ddsMaxInput: $('ddsMaxInput'),
+  ddsCenterField: $('ddsCenterField'),
+  ddsMinField: $('ddsMinField'),
+  ddsMaxField: $('ddsMaxField'),
+  kpUnit: $('kpUnit'),
+  jumperModal: $('jumperModal'),
+  modalCancelBtn: $('modalCancelBtn'),
+  modalConfirmBtn: $('modalConfirmBtn'),
   kpInput: $('kpInput'),
   kiInput: $('kiInput'),
   kdInput: $('kdInput'),
@@ -82,9 +95,18 @@ const els = {
   resetLoopBtn: $('resetLoopBtn'),
   runLoopBtn: $('runLoopBtn'),
   shutdownBtn: $('shutdownBtn'),
+  tabManualDac: $('tabManualDac'),
+  tabManualDds: $('tabManualDds'),
+  manualDacBox: $('manualDacBox'),
+  manualDdsBox: $('manualDdsBox'),
   manualDacSlider: $('manualDacSlider'),
+  manualDacInput: $('manualDacInput'),
   manualDacValue: $('manualDacValue'),
   manualSetBtn: $('manualSetBtn'),
+  manualDdsSlider: $('manualDdsSlider'),
+  manualDdsInput: $('manualDdsInput'),
+  manualDdsValue: $('manualDdsValue'),
+  manualDdsSetBtn: $('manualDdsSetBtn'),
   log: $('log'),
   clearLogBtn: $('clearLogBtn'),
 };
@@ -176,6 +198,26 @@ function onTelemetry(t) {
 
 function onConfiguration(cfg) {
   state.config = cfg;
+  if (els.generatorSourceInput) {
+    els.generatorSourceInput.value = cfg.GeneratorSource !== undefined ? cfg.GeneratorSource : 0;
+    _currentGeneratorSource = String(cfg.GeneratorSource ?? 0);
+  }
+  if (els.ddsCenterInput) els.ddsCenterInput.value = cfg.DdsCenterFreq !== undefined ? cfg.DdsCenterFreq : 28000;
+  if (els.ddsMinInput) els.ddsMinInput.value = cfg.DdsMinFreq !== undefined ? cfg.DdsMinFreq : 20000;
+  if (els.ddsMaxInput) els.ddsMaxInput.value = cfg.DdsMaxFreq !== undefined ? cfg.DdsMaxFreq : 40000;
+  if (els.manualDdsSlider && cfg.DdsMinFreq !== undefined && cfg.DdsMaxFreq !== undefined) {
+    els.manualDdsSlider.min = cfg.DdsMinFreq;
+    els.manualDdsSlider.max = cfg.DdsMaxFreq;
+  }
+  if (els.manualDdsInput && cfg.DdsCenterFreq !== undefined) {
+    if (!els.manualDdsInput.value || els.manualDdsInput.value === '28000') {
+      els.manualDdsInput.value = cfg.DdsCenterFreq;
+      if (els.manualDdsSlider) els.manualDdsSlider.value = cfg.DdsCenterFreq;
+      if (els.manualDdsValue) els.manualDdsValue.textContent = `${parseFloat(cfg.DdsCenterFreq).toFixed(2)} Hz`;
+    }
+  }
+  updateGeneratorSourceUI(cfg.GeneratorSource ?? 0);
+
   els.kpInput.value = fmt(cfg.Kp, 7);
   els.kiInput.value = fmt(cfg.Ki, 7);
   els.kdInput.value = fmt(cfg.Kd, 7);
@@ -192,7 +234,8 @@ function onConfiguration(cfg) {
   els.loopValue.textContent = cfg.LoopPeriodMs;
 
   els.manualFlag.hidden = !cfg.ManualMode;
-  log('ok', `Config loaded: Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · thr=${cfg.LockThresholdNs} ns · hold=${cfg.LockHoldCycles} · timeout=${cfg.LockMemoryTimeoutMs} ms · stream=${cfg.StreamPeriodMs} ms · loss=${cfg.SignalLossName}`);
+  const srcName = cfg.GeneratorSource === 1 ? 'DDS (AD9833)' : 'DAC (CD4046 VCO)';
+  log('ok', `Config loaded: Source=${srcName} · Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · loss=${cfg.SignalLossName}`);
 }
 
 const LOCK_STATES = {
@@ -233,8 +276,12 @@ function setUiConnected(connected) {
   els.applyCfgBtn.disabled = !connected || !state.config;
   els.saveCfgBtn.disabled = !connected;
   els.loadCfgBtn.disabled = !connected;
-  els.manualDacSlider.disabled = !connected;
-  els.manualSetBtn.disabled = !connected;
+  if (els.manualDacSlider) els.manualDacSlider.disabled = !connected;
+  if (els.manualDacInput) els.manualDacInput.disabled = !connected;
+  if (els.manualSetBtn) els.manualSetBtn.disabled = !connected;
+  if (els.manualDdsSlider) els.manualDdsSlider.disabled = !connected;
+  if (els.manualDdsInput) els.manualDdsInput.disabled = !connected;
+  if (els.manualDdsSetBtn) els.manualDdsSetBtn.disabled = !connected;
   els.startLogBtn.disabled = !connected || state.logging;
   if (!connected) {
     state.telemetry = null;
@@ -245,6 +292,7 @@ function setUiConnected(connected) {
     setLockBadge('error', 'OFFLINE');
     setStreamBadge('muted', 'NO DATA');
     setEepromBadge('muted', 'EEPROM —');
+    setDdsBadge('muted', 'AD9833 —');
     els.staleFlag.hidden = true;
     els.manualFlag.hidden = true;
   }
@@ -265,6 +313,27 @@ function updateStatus(t) {
     setEepromBadge('ok', 'EEPROM OK');
   } else {
     setEepromBadge('danger', 'EEPROM ERR');
+  }
+
+  const isDdsActive = (t.DdsStatus & 0x80) !== 0;
+  const ddsHwStatus = t.DdsStatus & 0x7F;
+
+  if (isDdsActive) {
+    if (ddsHwStatus === 2) {
+      setDdsBadge('ok', 'DDS ACTIVE · SIG OK');
+    } else if (ddsHwStatus === 1) {
+      setDdsBadge('ok', 'DDS ACTIVE');
+    } else {
+      setDdsBadge('danger', 'DDS ERR');
+    }
+  } else {
+    if (ddsHwStatus === 2) {
+      setDdsBadge('ok', 'AD9833 READY (SIG)');
+    } else if (ddsHwStatus === 1) {
+      setDdsBadge('ok', 'AD9833 READY');
+    } else {
+      setDdsBadge('danger', 'AD9833 ERR');
+    }
   }
 }
 
@@ -287,6 +356,12 @@ function setEepromBadge(cls, text) {
   if (!els.eepromBadge) return;
   els.eepromBadge.className = `badge badge-${cls}`;
   els.eepromBadgeText.textContent = text;
+}
+
+function setDdsBadge(cls, text) {
+  if (!els.ddsBadge) return;
+  els.ddsBadge.className = `badge badge-${cls}`;
+  els.ddsBadgeText.textContent = text;
 }
 
 // ---------------- Charts (ECharts + RAF batching) ----------------
@@ -448,6 +523,16 @@ function onApplyConfig() {
   if (stream !== null && stream >= 1 && stream <= 65535) patch.StreamPeriodMs = stream;
   patch.SignalLossBehavior = loss;
 
+  if (els.generatorSourceInput) {
+    patch.GeneratorSource = parseInt(els.generatorSourceInput.value, 10);
+  }
+  const ddsCenter = num(els.ddsCenterInput);
+  if (ddsCenter !== null && ddsCenter >= 1000 && ddsCenter <= 500000) patch.DdsCenterFreq = ddsCenter;
+  const ddsMin = num(els.ddsMinInput);
+  if (ddsMin !== null && ddsMin >= 1000 && ddsMin <= 500000) patch.DdsMinFreq = ddsMin;
+  const ddsMax = num(els.ddsMaxInput);
+  if (ddsMax !== null && ddsMax >= 1000 && ddsMax <= 500000) patch.DdsMaxFreq = ddsMax;
+
   if (Object.keys(patch).length === 0) {
     log('warn', 'No valid values to apply');
     return;
@@ -501,15 +586,61 @@ function onShutdown() {
 }
 
 function onManualSet() {
-  const v = parseFloat(els.manualDacSlider.value);
-  call('SetManualVoltage', v);
-  els.manualDacValue.textContent = `${v.toFixed(2)} V`;
-  log('warn', `Manual DAC voltage set to ${v.toFixed(2)} V (loop disengaged)`);
+  const v = parseFloat(els.manualDacInput?.value || els.manualDacSlider.value);
+  if (!isNaN(v) && v >= 0.0 && v <= 3.3) {
+    call('SetManualVoltage', v);
+    els.manualDacValue.textContent = `${v.toFixed(2)} V`;
+    els.manualDacSlider.value = v;
+    if (els.manualDacInput) els.manualDacInput.value = v.toFixed(2);
+    log('warn', `Manual DAC voltage set to ${v.toFixed(2)} V (loop disengaged)`);
+  }
 }
 
 function onManualSlider() {
   const v = parseFloat(els.manualDacSlider.value);
   els.manualDacValue.textContent = `${v.toFixed(2)} V`;
+  if (els.manualDacInput) els.manualDacInput.value = v.toFixed(2);
+}
+
+function onManualDacInput() {
+  const v = parseFloat(els.manualDacInput.value);
+  if (!isNaN(v) && v >= 0.0 && v <= 3.3) {
+    els.manualDacSlider.value = v;
+    els.manualDacValue.textContent = `${v.toFixed(2)} V`;
+  }
+}
+
+function onManualDdsSet() {
+  const f = parseFloat(els.manualDdsInput?.value || els.manualDdsSlider.value);
+  if (!isNaN(f) && f >= 1000 && f <= 500000) {
+    call('SetManualFrequency', f);
+    els.manualDdsValue.textContent = `${f.toFixed(2)} Hz`;
+    els.manualDdsSlider.value = f;
+    if (els.manualDdsInput) els.manualDdsInput.value = f.toFixed(2);
+    log('warn', `Manual DDS frequency set to ${f.toFixed(2)} Hz (loop disengaged)`);
+  }
+}
+
+function onManualDdsSlider() {
+  const f = parseFloat(els.manualDdsSlider.value);
+  els.manualDdsValue.textContent = `${f.toFixed(2)} Hz`;
+  if (els.manualDdsInput) els.manualDdsInput.value = f.toFixed(2);
+}
+
+function onManualDdsInput() {
+  const f = parseFloat(els.manualDdsInput.value);
+  if (!isNaN(f) && f >= 1000 && f <= 500000) {
+    els.manualDdsSlider.value = f;
+    els.manualDdsValue.textContent = `${f.toFixed(2)} Hz`;
+  }
+}
+
+function selectManualTab(tab) {
+  const isDds = tab === 'dds';
+  if (els.tabManualDac) els.tabManualDac.classList.toggle('active', !isDds);
+  if (els.tabManualDds) els.tabManualDds.classList.toggle('active', isDds);
+  if (els.manualDacBox) els.manualDacBox.hidden = isDds;
+  if (els.manualDdsBox) els.manualDdsBox.hidden = !isDds;
 }
 
 // ---------------- Logging ----------------
@@ -523,6 +654,49 @@ function log(level, msg) {
   els.log.appendChild(line);
   while (els.log.childElementCount > 500) els.log.removeChild(els.log.firstChild);
   els.log.scrollTop = els.log.scrollHeight;
+}
+
+// ---------------- Generator Source & Jumper Modal UI ----------------
+let _currentGeneratorSource = '0';
+
+function updateGeneratorSourceUI(source) {
+  const isDds = source === 1 || source === '1';
+  if (els.ddsCenterField) els.ddsCenterField.classList.toggle('field-highlight', isDds);
+  if (els.ddsMinField) els.ddsMinField.classList.toggle('field-highlight', isDds);
+  if (els.ddsMaxField) els.ddsMaxField.classList.toggle('field-highlight', isDds);
+  if (els.kpUnit) els.kpUnit.textContent = isDds ? '(Hz/ns)' : '(V/ns)';
+  selectManualTab(isDds ? 'dds' : 'dac');
+}
+
+if (els.generatorSourceInput) {
+  els.generatorSourceInput.addEventListener('change', () => {
+    const selected = els.generatorSourceInput.value;
+    if (selected === '1' && _currentGeneratorSource === '0') {
+      if (els.jumperModal) els.jumperModal.hidden = false;
+    } else {
+      _currentGeneratorSource = selected;
+      updateGeneratorSourceUI(parseInt(selected, 10));
+    }
+  });
+}
+
+if (els.modalCancelBtn) {
+  els.modalCancelBtn.addEventListener('click', () => {
+    if (els.jumperModal) els.jumperModal.hidden = true;
+    if (els.generatorSourceInput) els.generatorSourceInput.value = '0';
+    _currentGeneratorSource = '0';
+    updateGeneratorSourceUI(0);
+    log('info', 'Generator Source kept at DAC (CD4046 VCO)');
+  });
+}
+
+if (els.modalConfirmBtn) {
+  els.modalConfirmBtn.addEventListener('click', () => {
+    if (els.jumperModal) els.jumperModal.hidden = true;
+    _currentGeneratorSource = '1';
+    updateGeneratorSourceUI(1);
+    log('warn', 'Switched Generator Source to DDS (AD9833). Ensure resistor jumper is set to DDS!');
+  });
 }
 
 // ---------------- Helpers ----------------
@@ -540,6 +714,20 @@ els.runLoopBtn.addEventListener('click', onRunLoop);
 els.shutdownBtn.addEventListener('click', onShutdown);
 els.manualSetBtn.addEventListener('click', onManualSet);
 els.manualDacSlider.addEventListener('input', onManualSlider);
+if (els.manualDacInput) {
+  els.manualDacInput.addEventListener('input', onManualDacInput);
+  els.manualDacInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') onManualSet(); });
+}
+
+if (els.tabManualDac) els.tabManualDac.addEventListener('click', () => selectManualTab('dac'));
+if (els.tabManualDds) els.tabManualDds.addEventListener('click', () => selectManualTab('dds'));
+
+if (els.manualDdsSetBtn) els.manualDdsSetBtn.addEventListener('click', onManualDdsSet);
+if (els.manualDdsSlider) els.manualDdsSlider.addEventListener('input', onManualDdsSlider);
+if (els.manualDdsInput) {
+  els.manualDdsInput.addEventListener('input', onManualDdsInput);
+  els.manualDdsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') onManualDdsSet(); });
+}
 els.refreshCfgBtn.addEventListener('click', () => { refreshConfiguration(); log('info', 'Requesting configuration from firmware…'); });
 els.pauseBtn.addEventListener('click', () => {
   state.paused = !state.paused;

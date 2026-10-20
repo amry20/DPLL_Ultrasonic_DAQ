@@ -19,4 +19,8 @@ public sealed class DpllConfigurationPatch
     public uint? StreamPeriodMs { get; set; }
     public bool? ManualMode { get; set; }
     public int? SignalLossBehavior { get; set; }
+    public int? GeneratorSource { get; set; }
+    public double? DdsCenterFreq { get; set; }
+    public double? DdsMinFreq { get; set; }
+    public double? DdsMaxFreq { get; set; }
 }

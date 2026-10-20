@@ -79,6 +79,9 @@ public class DpllHub : Hub
     /// <summary>Set manual DAC voltage (disables the loop).</summary>
     public void SetManualVoltage(double volts) => _device.SetManualVoltage(volts);
 
+    /// <summary>Set manual DDS frequency (disables the loop).</summary>
+    public void SetManualFrequency(double freqHz) => _device.SetManualFrequency(freqHz);
+
     /// <summary>Re-enable automatic control (manual mode off).</summary>
     public void RunLoop() => _device.RunLoop();
 

@@ -26,6 +26,9 @@
       <div id="eepromBadge" class="badge badge-muted" title="EEPROM 24LC16B status on I2C (PB6/PB7)">
         <span class="dot"></span><span id="eepromBadgeText">EEPROM —</span>
       </div>
+      <div id="ddsBadge" class="badge badge-muted" title="AD9833 DDS Status (MCLK=PA8, FSYNC=PC4, SCK=PA5, MOSI=PA7)">
+        <span class="dot"></span><span id="ddsBadgeText">AD9833 —</span>
+      </div>
       <div id="streamBadge" class="badge badge-muted" title="Telemetry stream freshness">
         <span class="dot"></span><span id="streamBadgeText">NO DATA</span>
       </div>
@@ -110,8 +113,27 @@
       </div>
 
       <div class="config-grid">
+        <div class="field field-wide" id="sourceField">
+          <label for="generatorSourceInput">DPLL Generator Source</label>
+          <select id="generatorSourceInput">
+            <option value="0">DAC (CD4046 External VCO)</option>
+            <option value="1">DDS (AD9833 Internal Synthesizer)</option>
+          </select>
+        </div>
+        <div class="field" id="ddsCenterField">
+          <label for="ddsCenterInput">DDS Center <span class="unit">(Hz)</span></label>
+          <input id="ddsCenterInput" type="number" step="0.1" min="1000" max="500000" placeholder="28000" />
+        </div>
+        <div class="field" id="ddsMinField">
+          <label for="ddsMinInput">Freq Min <span class="unit">(Hz)</span></label>
+          <input id="ddsMinInput" type="number" step="1" min="1000" max="500000" placeholder="20000" />
+        </div>
+        <div class="field" id="ddsMaxField">
+          <label for="ddsMaxInput">Freq Max <span class="unit">(Hz)</span></label>
+          <input id="ddsMaxInput" type="number" step="1" min="1000" max="500000" placeholder="40000" />
+        </div>
         <div class="field">
-          <label for="kpInput">Kp <span class="unit">(V/ns)</span></label>
+          <label for="kpInput">Kp <span class="unit" id="kpUnit">(V/ns)</span></label>
           <input id="kpInput" type="number" step="0.0000001" min="0" placeholder="—" />
         </div>
         <div class="field">
@@ -173,15 +195,38 @@
         <button id="shutdownBtn" class="btn btn-danger">Shutdown (0 V)</button>
       </div>
 
-      <div class="manual-box">
+      <div class="manual-tabs">
+        <button type="button" id="tabManualDac" class="manual-tab active">Manual DAC (Voltage)</button>
+        <button type="button" id="tabManualDds" class="manual-tab">Manual DDS (Frequency)</button>
+      </div>
+
+      <div class="manual-box" id="manualDacBox">
         <div class="manual-head">
-          <span>Manual DAC control</span>
+          <span>Manual DAC Voltage Control</span>
           <span class="manual-value mono" id="manualDacValue">0.00 V</span>
         </div>
-        <input id="manualDacSlider" type="range" min="0" max="3.3" step="0.01" value="0" disabled />
+        <div class="manual-slider-row">
+          <input id="manualDacSlider" type="range" min="0" max="3.3" step="0.01" value="0" disabled />
+          <input id="manualDacInput" type="number" min="0" max="3.3" step="0.01" value="0.00" class="manual-num-input" disabled />
+        </div>
         <div class="manual-foot">
           <button id="manualSetBtn" class="btn btn-warn" disabled>Set manual voltage</button>
           <span class="hint">Setting a manual voltage disengages the loop.</span>
+        </div>
+      </div>
+
+      <div class="manual-box" id="manualDdsBox" hidden>
+        <div class="manual-head">
+          <span>Manual DDS Frequency Control</span>
+          <span class="manual-value mono" id="manualDdsValue">28000.00 Hz</span>
+        </div>
+        <div class="manual-slider-row">
+          <input id="manualDdsSlider" type="range" min="20000" max="40000" step="1" value="28000" disabled />
+          <input id="manualDdsInput" type="number" min="1000" max="500000" step="0.1" value="28000" class="manual-num-input" disabled />
+        </div>
+        <div class="manual-foot">
+          <button id="manualDdsSetBtn" class="btn btn-warn" disabled>Set manual frequency</button>
+          <span class="hint">Setting a manual frequency disengages the loop.</span>
         </div>
       </div>
     </section>
@@ -201,6 +246,24 @@
     <span class="footer-sep">·</span>
     <span>Serial protocol: binary opcodes + ASCII debug · Stream @ ~100 Hz</span>
   </footer>
+
+  <!-- ======================= Jumper Warning Modal ======================= -->
+  <div id="jumperModal" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <div class="modal-icon">⚠️</div>
+      <h3>Generator Source Jumper Warning</h3>
+      <p>You are switching the DPLL Generator Source to <strong>DDS (AD9833)</strong>.</p>
+      <div class="modal-alert">
+        <strong>CRITICAL HARDWARE REQUIREMENT:</strong>
+        Ensure the physical resistor jumper on the PCB is routed to the <strong>AD9833 DDS output</strong>, NOT to the CD4046 VCO!
+      </div>
+      <p class="modal-sub">Operating in DDS mode without routing the jumper properly will leave the transducer without driving signals and break feedback tracking.</p>
+      <div class="modal-actions">
+        <button id="modalCancelBtn" class="btn btn-ghost">Cancel (Keep DAC)</button>
+        <button id="modalConfirmBtn" class="btn btn-danger">Confirm (Jumper Verified)</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ECharts (offline, dari assets) -->
   <script src="assets/libs/echart/echarts.min.js"></script>

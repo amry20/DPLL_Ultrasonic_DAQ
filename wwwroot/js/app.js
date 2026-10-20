@@ -45,6 +45,8 @@ const $ = (id) => document.getElementById(id);
 const els = {
   connBadge: $('connBadge'),
   connBadgeText: $('connBadgeText'),
+  eepromBadge: $('eepromBadge'),
+  eepromBadgeText: $('eepromBadgeText'),
   streamBadge: $('streamBadge'),
   streamBadgeText: $('streamBadgeText'),
   lockIndicator: $('lockIndicator'),
@@ -63,6 +65,8 @@ const els = {
   stopLogBtn: $('stopLogBtn'),
   refreshCfgBtn: $('refreshCfgBtn'),
   applyCfgBtn: $('applyCfgBtn'),
+  saveCfgBtn: $('saveCfgBtn'),
+  loadCfgBtn: $('loadCfgBtn'),
   kpInput: $('kpInput'),
   kiInput: $('kiInput'),
   kdInput: $('kdInput'),
@@ -98,6 +102,7 @@ function initSignalR() {
   connection.on('Telemetry', onTelemetry);
   connection.on('Configuration', onConfiguration);
   connection.on('ConnectionState', onConnectionState);
+  connection.on('EepromActionResult', onEepromActionResult);
 
   connection.onreconnecting(() => {
     log('warn', 'SignalR reconnecting…');
@@ -226,6 +231,8 @@ function onConnectionState(code, port) {
 
 function setUiConnected(connected) {
   els.applyCfgBtn.disabled = !connected || !state.config;
+  els.saveCfgBtn.disabled = !connected;
+  els.loadCfgBtn.disabled = !connected;
   els.manualDacSlider.disabled = !connected;
   els.manualSetBtn.disabled = !connected;
   els.startLogBtn.disabled = !connected || state.logging;
@@ -237,6 +244,7 @@ function setUiConnected(connected) {
     els.loopValue.textContent = '—';
     setLockBadge('error', 'OFFLINE');
     setStreamBadge('muted', 'NO DATA');
+    setEepromBadge('muted', 'EEPROM —');
     els.staleFlag.hidden = true;
     els.manualFlag.hidden = true;
   }
@@ -252,6 +260,12 @@ function updateStatus(t) {
   const s = LOCK_STATES[t.LockStatus] || { text: 'UNKNOWN', cls: 'error' };
   setLockBadge(s.cls, s.text);
   els.staleFlag.hidden = t.PhaseStale !== 1;
+
+  if (t.EepromStatus === 1) {
+    setEepromBadge('ok', 'EEPROM OK');
+  } else {
+    setEepromBadge('danger', 'EEPROM ERR');
+  }
 }
 
 function setLockBadge(cls, text) {
@@ -267,6 +281,12 @@ function setConnBadge(cls, text) {
 function setStreamBadge(cls, text) {
   els.streamBadge.className = `badge badge-${cls}`;
   els.streamBadgeText.textContent = text;
+}
+
+function setEepromBadge(cls, text) {
+  if (!els.eepromBadge) return;
+  els.eepromBadge.className = `badge badge-${cls}`;
+  els.eepromBadgeText.textContent = text;
 }
 
 // ---------------- Charts (ECharts + RAF batching) ----------------
@@ -434,7 +454,35 @@ function onApplyConfig() {
   }
 
   call('ApplyConfiguration', patch);
-  log('info', 'Configuration sent to firmware…');
+  log('info', 'Configuration applied to RAM (not saved to EEPROM)');
+}
+
+function onSaveConfig() {
+  if (!state.connected) { log('warn', 'Not connected'); return; }
+  call('SaveConfigurationToEeprom');
+  log('info', 'Saving active configuration to EEPROM…');
+}
+
+function onLoadConfig() {
+  if (!state.connected) { log('warn', 'Not connected'); return; }
+  call('LoadConfigurationFromEeprom');
+  log('info', 'Loading configuration from EEPROM…');
+}
+
+function onEepromActionResult(isSave, success) {
+  if (isSave) {
+    if (success) {
+      log('ok', 'EEPROM: Configuration successfully saved to 24LC16B!');
+    } else {
+      log('error', 'EEPROM: Failed to save configuration!');
+    }
+  } else {
+    if (success) {
+      log('ok', 'EEPROM: Configuration successfully loaded and applied!');
+    } else {
+      log('error', 'EEPROM: Failed to load configuration from EEPROM!');
+    }
+  }
 }
 
 function onResetLoop() {
@@ -485,6 +533,8 @@ function fmt(value, decimals) {
 
 // ---------------- Wire up events ----------------
 els.applyCfgBtn.addEventListener('click', onApplyConfig);
+els.saveCfgBtn.addEventListener('click', onSaveConfig);
+els.loadCfgBtn.addEventListener('click', onLoadConfig);
 els.resetLoopBtn.addEventListener('click', onResetLoop);
 els.runLoopBtn.addEventListener('click', onRunLoop);
 els.shutdownBtn.addEventListener('click', onShutdown);

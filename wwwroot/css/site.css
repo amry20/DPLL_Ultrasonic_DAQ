@@ -136,6 +136,8 @@ select option { background: var(--bg-panel); }
 
 .btn-primary { background: linear-gradient(135deg, #0ea5e9, #6366f1); border-color: transparent; color: #fff; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.15); color: #fff; }
+.btn-save { background: linear-gradient(135deg, #059669, #10b981); border-color: transparent; color: #fff; }
+.btn-save:hover:not(:disabled) { filter: brightness(1.15); color: #fff; }
 .btn-danger { border-color: rgba(248, 113, 113, 0.5); color: var(--danger); }
 .btn-danger:hover:not(:disabled) { background: rgba(248, 113, 113, 0.12); color: var(--danger); }
 .btn-success { border-color: rgba(52, 211, 153, 0.5); color: var(--ok); }

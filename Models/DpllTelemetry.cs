@@ -21,6 +21,12 @@ public sealed class DpllTelemetry
     /// <summary>0 = fresh measurement, 1 = ZCD absent, value is a held last-valid phase.</summary>
     public int PhaseStale { get; set; }
 
+    /// <summary>0 = Disconnected/Error, 1 = Connected & OK.</summary>
+    public int EepromStatus { get; set; }
+
+    /// <summary>True when external EEPROM 24LC16B is detected and responding on I2C.</summary>
+    public bool IsEepromOk => EepromStatus == 1;
+
     /// <summary>Seconds since the Unix epoch (UTC) when this sample was captured by the host.</summary>
     public double Timestamp { get; set; }
 

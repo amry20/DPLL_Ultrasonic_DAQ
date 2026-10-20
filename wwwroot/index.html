@@ -23,6 +23,9 @@
     </div>
 
     <div class="topbar-right">
+      <div id="eepromBadge" class="badge badge-muted" title="EEPROM 24LC16B status on I2C (PB6/PB7)">
+        <span class="dot"></span><span id="eepromBadgeText">EEPROM —</span>
+      </div>
       <div id="streamBadge" class="badge badge-muted" title="Telemetry stream freshness">
         <span class="dot"></span><span id="streamBadgeText">NO DATA</span>
       </div>
@@ -162,7 +165,9 @@
       </div>
 
       <div class="control-actions">
-        <button id="applyCfgBtn" class="btn btn-primary" disabled>Apply configuration</button>
+        <button id="applyCfgBtn" class="btn btn-primary" disabled title="Send configuration to running controller in RAM (does not save to EEPROM)">Apply (RAM)</button>
+        <button id="saveCfgBtn" class="btn btn-save" disabled title="Save current active configuration to 24LC16B EEPROM">Save to EEPROM</button>
+        <button id="loadCfgBtn" class="btn btn-ghost" disabled title="Reload configuration from 24LC16B EEPROM">Load from EEPROM</button>
         <button id="resetLoopBtn" class="btn btn-warn">Reset loop</button>
         <button id="runLoopBtn" class="btn btn-success">Run loop</button>
         <button id="shutdownBtn" class="btn btn-danger">Shutdown (0 V)</button>

@@ -45,6 +45,9 @@ public static class Opcode
     public const ushort GET_SIGNAL_LOSS_BEHAVIOR = 0x0025;
     public const ushort SET_STREAM_PERIOD = 0x0026;
     public const ushort GET_STREAM_PERIOD = 0x0027;
+    public const ushort GET_EEPROM_STATUS = 0x0028;
+    public const ushort SAVE_CONFIG_EEPROM = 0x0029;
+    public const ushort LOAD_CONFIG_EEPROM = 0x002A;
 }
 
 /// <summary>
@@ -187,6 +190,7 @@ public static class DpllProtocol
             DACVoltage_V = ReadFloatLe(payload, 8),
             LockStatus = payload.Length > 12 ? payload[12] : 0,
             PhaseStale = payload.Length > 13 ? payload[13] : 0,
+            EepromStatus = payload.Length > 14 ? payload[14] : 0,
             Timestamp = timestamp.ToUnixTimeSeconds() + timestamp.Millisecond / 1000.0
         };
         return t;

@@ -58,6 +58,10 @@ app.Lifetime.ApplicationStarted.Register(() =>
     device.ConfigurationReceived += config =>
         hubContext.Clients.All.SendAsync("Configuration", config);
 
+    // Broadcast EEPROM save/load results.
+    device.EepromActionCompleted += (isSave, success) =>
+        hubContext.Clients.All.SendAsync("EepromActionResult", isSave, success);
+
     try
     {
         device.Start();

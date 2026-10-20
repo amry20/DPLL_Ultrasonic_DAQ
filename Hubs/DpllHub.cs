@@ -84,4 +84,10 @@ public class DpllHub : Hub
 
     /// <summary>Ask the firmware to re-dump its configuration.</summary>
     public void RefreshConfiguration() => _device.RefreshConfiguration();
+
+    /// <summary>Save current firmware configuration to 24LC16B EEPROM.</summary>
+    public void SaveConfigurationToEeprom() => _device.SaveConfigurationToEeprom();
+
+    /// <summary>Load saved configuration from 24LC16B EEPROM and apply it.</summary>
+    public void LoadConfigurationFromEeprom() => _device.LoadConfigurationFromEeprom();
 }

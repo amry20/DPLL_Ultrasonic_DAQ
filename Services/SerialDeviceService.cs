@@ -71,6 +71,7 @@ public sealed class SerialDeviceService : IDisposable
     public event Action<DpllTelemetry>? TelemetryReceived;
     public event Action<DeviceConnectionState, string?>? ConnectionChanged;
     public event Action<DpllConfiguration>? ConfigurationReceived;
+    public event Action<bool, bool>? EepromActionCompleted; // (isSave, success)
 
     public SerialDeviceService(IOptionsMonitor<SerialOptions> optionsMonitor, ILogger<SerialDeviceService> logger)
     {
@@ -435,6 +436,35 @@ public sealed class SerialDeviceService : IDisposable
                     break;
                 }
 
+                case Opcode.GET_EEPROM_STATUS:
+                {
+                    bool eepromOk = payload.Length > 0 && payload[0] != 0;
+                    _logger.LogInformation("EEPROM status from firmware: {Status}", eepromOk ? "Connected & OK" : "Not responding");
+                    CompletePendingGet(opcode);
+                    break;
+                }
+
+                case Opcode.SAVE_CONFIG_EEPROM:
+                {
+                    bool ok = payload.Length > 0 && payload[0] != 0;
+                    _logger.LogInformation("SAVE_CONFIG_EEPROM reply from firmware: {Result}", ok ? "SUCCESS" : "FAILED");
+                    CompletePendingGet(opcode);
+                    try { EepromActionCompleted?.Invoke(true, ok); }
+                    catch (Exception ex) { _logger.LogError(ex, "EepromActionCompleted handler threw."); }
+                    break;
+                }
+
+                case Opcode.LOAD_CONFIG_EEPROM:
+                {
+                    bool ok = payload.Length > 0 && payload[0] != 0;
+                    _logger.LogInformation("LOAD_CONFIG_EEPROM reply from firmware: {Result}", ok ? "SUCCESS" : "FAILED");
+                    CompletePendingGet(opcode);
+                    try { EepromActionCompleted?.Invoke(false, ok); }
+                    catch (Exception ex) { _logger.LogError(ex, "EepromActionCompleted handler threw."); }
+                    RefreshConfiguration();
+                    break;
+                }
+
                 default:
                     _logger.LogInformation("RX binary opcode 0x{Opcode:X4} ({Len} payload bytes)", opcode, payload.Length);
                     break;
@@ -690,6 +720,12 @@ public sealed class SerialDeviceService : IDisposable
 
     /// <summary>Re-enable automatic control (manual mode off).</summary>
     public void RunLoop() => SendBinary(Opcode.SET_ENABLE_LOOP, [1]);
+
+    /// <summary>Save current firmware configuration to 24LC16B EEPROM.</summary>
+    public void SaveConfigurationToEeprom() => SendBinary(Opcode.SAVE_CONFIG_EEPROM, default);
+
+    /// <summary>Load saved configuration from 24LC16B EEPROM and apply it.</summary>
+    public void LoadConfigurationFromEeprom() => SendBinary(Opcode.LOAD_CONFIG_EEPROM, default);
 
     public void Dispose()
     {

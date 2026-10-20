@@ -54,7 +54,7 @@ public sealed class CsvLoggerService : IDisposable
             _writer = new StreamWriter(path, append: false, Encoding.UTF8) { AutoFlush = true };
             _writer.WriteLine(
                 "Timestamp_ms,ReferenceFrequencyHz,PhaseErrorNs,DACVoltage_V," +
-                "LockStatus,LockState,PhaseStale,IsLocked");
+                "LockStatus,LockState,PhaseStale,IsLocked,EepromStatus");
             _writer.Flush();
 
             _fileName = path;
@@ -80,7 +80,7 @@ public sealed class CsvLoggerService : IDisposable
                 $"{tsMs},{t.ReferenceFrequencyHz.ToString("F3", CultureInfo.InvariantCulture)}," +
                 $"{t.PhaseErrorNs.ToString("F1", CultureInfo.InvariantCulture)}," +
                 $"{t.DACVoltage_V.ToString("F4", CultureInfo.InvariantCulture)}," +
-                $"{t.LockStatus},{t.State},{t.PhaseStale},{(t.IsLocked ? 1 : 0)}"));
+                $"{t.LockStatus},{t.State},{t.PhaseStale},{(t.IsLocked ? 1 : 0)},{t.EepromStatus}"));
             _rowCount++;
         }
     }

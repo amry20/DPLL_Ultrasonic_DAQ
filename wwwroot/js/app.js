@@ -90,6 +90,7 @@ const els = {
   centerInput: $('centerInput'),
   targetInput: $('targetInput'),
   slewInput: $('slewInput'),
+  slewUnit: $('slewUnit'),
   loopInput: $('loopInput'),
   thrInput: $('thrInput'),
   holdInput: $('holdInput'),
@@ -249,7 +250,7 @@ function onConfiguration(cfg) {
   els.kdInput.value = fmt(cfg.Kd, 7);
   els.centerInput.value = fmt(cfg.CenterVoltage, 3);
   els.targetInput.value = fmt(cfg.TargetPhase, 1);
-  els.slewInput.value = fmt(cfg.MaxSlew, 2);
+  els.slewInput.value = fmt(cfg.MaxSlew, cfg.GeneratorSource === 1 ? 0 : 2);
   els.loopInput.value = cfg.LoopPeriodMs;
   els.thrInput.value = fmt(cfg.LockThresholdNs, 0);
   els.holdInput.value = cfg.LockHoldCycles;
@@ -719,6 +720,11 @@ function updateGeneratorSourceUI(source) {
   if (els.ddsMinField) els.ddsMinField.classList.toggle('field-highlight', isDds);
   if (els.ddsMaxField) els.ddsMaxField.classList.toggle('field-highlight', isDds);
   if (els.kpUnit) els.kpUnit.textContent = isDds ? '(Hz/ns)' : '(V/ns)';
+  if (els.slewUnit) els.slewUnit.textContent = isDds ? '(Hz/s)' : '(V/s)';
+  if (els.slewInput) {
+    els.slewInput.step = isDds ? '100' : '0.1';
+    els.slewInput.placeholder = isDds ? '20000' : '30';
+  }
   selectManualTab(isDds ? 'dds' : 'dac');
 }
 

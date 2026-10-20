@@ -56,6 +56,9 @@ public static class Opcode
     public const ushort GET_DDS_CENTER_FREQ = 0x0030;
     public const ushort SET_DDS_MANUAL_FREQ = 0x0031;
     public const ushort GET_DDS_MANUAL_FREQ = 0x0032;
+    public const ushort SET_DDS_MCO_CLOCK   = 0x0033;
+    public const ushort GET_DDS_MCO_CLOCK   = 0x0034;
+    public const ushort RESET_CONFIG_EEPROM = 0x0035;
 }
 
 /// <summary>

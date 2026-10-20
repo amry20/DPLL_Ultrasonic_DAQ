@@ -93,4 +93,7 @@ public class DpllHub : Hub
 
     /// <summary>Load saved configuration from 24LC16B EEPROM and apply it.</summary>
     public void LoadConfigurationFromEeprom() => _device.LoadConfigurationFromEeprom();
+
+    /// <summary>Reset configuration in 24LC16B EEPROM and restore defaults.</summary>
+    public void ResetEepromConfiguration() => _device.ResetEepromConfiguration();
 }

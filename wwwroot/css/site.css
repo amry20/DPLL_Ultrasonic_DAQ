@@ -144,6 +144,8 @@ select option { background: var(--bg-panel); }
 .btn-success:hover:not(:disabled) { background: rgba(52, 211, 153, 0.12); color: var(--ok); }
 .btn-warn { border-color: rgba(251, 191, 36, 0.5); color: var(--warn); }
 .btn-warn:hover:not(:disabled) { background: rgba(251, 191, 36, 0.12); color: var(--warn); }
+.btn-reset-eeprom { border-color: rgba(239, 68, 68, 0.45); color: #f87171; background: rgba(239, 68, 68, 0.08); }
+.btn-reset-eeprom:hover:not(:disabled) { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; color: #fff; box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
 .btn-ghost { background: transparent; }
 .icon-btn { padding: 8px; }
 .icon-btn svg { width: 16px; height: 16px; }
@@ -310,6 +312,14 @@ select option { background: var(--bg-panel); }
 .field label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .field .unit { color: var(--text-mute); text-transform: none; letter-spacing: 0; white-space: nowrap; }
 .field input, .field select { width: 100%; min-width: 0; }
+.field-wide { grid-column: span 2; }
+@media (max-width: 640px) {
+  .field-wide { grid-column: span 1; }
+}
+.field-highlight input, .field-highlight select {
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.15);
+}
 
 .control-actions {
   display: flex;

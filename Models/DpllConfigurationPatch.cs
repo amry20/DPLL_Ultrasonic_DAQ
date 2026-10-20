@@ -23,4 +23,5 @@ public sealed class DpllConfigurationPatch
     public double? DdsCenterFreq { get; set; }
     public double? DdsMinFreq { get; set; }
     public double? DdsMaxFreq { get; set; }
+    public int? DdsMcoClock { get; set; }
 }

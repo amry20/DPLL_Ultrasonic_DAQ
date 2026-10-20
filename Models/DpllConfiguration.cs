@@ -74,4 +74,33 @@ public sealed class DpllConfiguration
 
     /// <summary>DDS maximum allowable frequency in Hz.</summary>
     public double DdsMaxFreq { get; set; } = 40000.0;
+
+    /// <summary>Active DDS MCO clock preset: 0=8MHz HSE, 1=4MHz HSE, 2=2MHz HSE, 3=1.6MHz HSE, 4=16MHz HSI, 5=8MHz HSI, 6=4MHz HSI.</summary>
+    public int DdsMcoClock { get; set; } = 0;
+
+    /// <summary>Human-readable name of active MCO clock.</summary>
+    public string DdsMcoClockName => DdsMcoClock switch
+    {
+        0 => "HSE 8 MHz (/1)",
+        1 => "HSE 4 MHz (/2)",
+        2 => "HSE 2 MHz (/4)",
+        3 => "HSE 1.6 MHz (/5)",
+        4 => "HSI 16 MHz (/1)",
+        5 => "HSI 8 MHz (/2)",
+        6 => "HSI 4 MHz (/4)",
+        _ => "Unknown"
+    };
+
+    /// <summary>DDS frequency resolution in Hz with active MCO clock.</summary>
+    public double DdsResolutionHz => DdsMcoClock switch
+    {
+        0 => 8000000.0 / 268435456.0,
+        1 => 4000000.0 / 268435456.0,
+        2 => 2000000.0 / 268435456.0,
+        3 => 1600000.0 / 268435456.0,
+        4 => 16000000.0 / 268435456.0,
+        5 => 8000000.0 / 268435456.0,
+        6 => 4000000.0 / 268435456.0,
+        _ => 8000000.0 / 268435456.0
+    };
 }

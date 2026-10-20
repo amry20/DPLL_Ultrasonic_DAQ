@@ -120,6 +120,19 @@
             <option value="1">DDS (AD9833 Internal Synthesizer)</option>
           </select>
         </div>
+        <div class="field field-wide" id="ddsMcoClockField">
+          <label for="ddsMcoClockInput">DDS MCO Clock (PA8 MCLK · Resolution &amp; Stability)</label>
+          <select id="ddsMcoClockInput">
+            <option value="0">HSE 8 MHz (/1) — Res: 0.0298 Hz (Crystal, Low Jitter 125ns) [Default]</option>
+            <option value="1">HSE 4 MHz (/2) — Res: 0.0149 Hz (Crystal, 2x Finer Resolution)</option>
+            <option value="2">HSE 2 MHz (/4) — Res: 0.0075 Hz (Crystal, High Resolution)</option>
+            <option value="3">HSE 1.6 MHz (/5) — Res: 0.0060 Hz (Crystal, Ultra-Fine Resolution)</option>
+            <option value="4">HSI 16 MHz (/1) — Res: 0.0596 Hz (Internal RC, Fast Edge 62.5ns)</option>
+            <option value="5">HSI 8 MHz (/2) — Res: 0.0298 Hz (Internal RC Fallback)</option>
+            <option value="6">HSI 4 MHz (/4) — Res: 0.0149 Hz (Internal RC Fallback)</option>
+          </select>
+          <small id="ddsMcoClockHint" style="font-size: 11px; color: var(--accent); margin-top: 2px;">Resolution: ±0.029802 Hz · Crystal 8.0 MHz</small>
+        </div>
         <div class="field" id="ddsCenterField">
           <label for="ddsCenterInput">DDS Center <span class="unit">(Hz)</span></label>
           <input id="ddsCenterInput" type="number" step="0.1" min="1000" max="500000" placeholder="28000" />
@@ -190,6 +203,7 @@
         <button id="applyCfgBtn" class="btn btn-primary" disabled title="Send configuration to running controller in RAM (does not save to EEPROM)">Apply (RAM)</button>
         <button id="saveCfgBtn" class="btn btn-save" disabled title="Save current active configuration to 24LC16B EEPROM">Save to EEPROM</button>
         <button id="loadCfgBtn" class="btn btn-ghost" disabled title="Reload configuration from 24LC16B EEPROM">Load from EEPROM</button>
+        <button id="resetEepromBtn" class="btn btn-reset-eeprom" disabled title="Erase EEPROM configuration and revert controller to factory defaults">Reset EEPROM</button>
         <button id="resetLoopBtn" class="btn btn-warn">Reset loop</button>
         <button id="runLoopBtn" class="btn btn-success">Run loop</button>
         <button id="shutdownBtn" class="btn btn-danger">Shutdown (0 V)</button>

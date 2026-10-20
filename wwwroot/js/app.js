@@ -69,10 +69,14 @@ const els = {
   applyCfgBtn: $('applyCfgBtn'),
   saveCfgBtn: $('saveCfgBtn'),
   loadCfgBtn: $('loadCfgBtn'),
+  resetEepromBtn: $('resetEepromBtn'),
   generatorSourceInput: $('generatorSourceInput'),
   ddsCenterInput: $('ddsCenterInput'),
   ddsMinInput: $('ddsMinInput'),
   ddsMaxInput: $('ddsMaxInput'),
+  ddsMcoClockInput: $('ddsMcoClockInput'),
+  ddsMcoClockField: $('ddsMcoClockField'),
+  ddsMcoClockHint: $('ddsMcoClockHint'),
   ddsCenterField: $('ddsCenterField'),
   ddsMinField: $('ddsMinField'),
   ddsMaxField: $('ddsMaxField'),
@@ -196,11 +200,33 @@ function onTelemetry(t) {
   }
 }
 
+const DDS_MCO_PRESETS = {
+  0: { name: 'HSE 8 MHz (/1)', res: 0.029802, desc: 'Crystal 8.0 MHz, low phase jitter (125ns), res 0.0298 Hz' },
+  1: { name: 'HSE 4 MHz (/2)', res: 0.014901, desc: 'Crystal 4.0 MHz, 2x finer resolution (0.0149 Hz)' },
+  2: { name: 'HSE 2 MHz (/4)', res: 0.007451, desc: 'Crystal 2.0 MHz, high resolution (0.00745 Hz)' },
+  3: { name: 'HSE 1.6 MHz (/5)', res: 0.005960, desc: 'Crystal 1.6 MHz, ultra-fine resolution (0.00596 Hz)' },
+  4: { name: 'HSI 16 MHz (/1)', res: 0.059605, desc: 'Internal RC 16.0 MHz, fastest edge (62.5ns)' },
+  5: { name: 'HSI 8 MHz (/2)', res: 0.029802, desc: 'Internal RC 8.0 MHz, standard resolution' },
+  6: { name: 'HSI 4 MHz (/4)', res: 0.014901, desc: 'Internal RC 4.0 MHz, high resolution' },
+};
+
+function updateMcoClockHint(val) {
+  if (!els.ddsMcoClockHint) return;
+  const p = DDS_MCO_PRESETS[val];
+  if (p) {
+    els.ddsMcoClockHint.textContent = `Resolution: ±${p.res.toFixed(6)} Hz · ${p.desc}`;
+  }
+}
+
 function onConfiguration(cfg) {
   state.config = cfg;
   if (els.generatorSourceInput) {
     els.generatorSourceInput.value = cfg.GeneratorSource !== undefined ? cfg.GeneratorSource : 0;
     _currentGeneratorSource = String(cfg.GeneratorSource ?? 0);
+  }
+  if (els.ddsMcoClockInput && cfg.DdsMcoClock !== undefined) {
+    els.ddsMcoClockInput.value = String(cfg.DdsMcoClock);
+    updateMcoClockHint(cfg.DdsMcoClock);
   }
   if (els.ddsCenterInput) els.ddsCenterInput.value = cfg.DdsCenterFreq !== undefined ? cfg.DdsCenterFreq : 28000;
   if (els.ddsMinInput) els.ddsMinInput.value = cfg.DdsMinFreq !== undefined ? cfg.DdsMinFreq : 20000;
@@ -235,7 +261,9 @@ function onConfiguration(cfg) {
 
   els.manualFlag.hidden = !cfg.ManualMode;
   const srcName = cfg.GeneratorSource === 1 ? 'DDS (AD9833)' : 'DAC (CD4046 VCO)';
-  log('ok', `Config loaded: Source=${srcName} · Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · loss=${cfg.SignalLossName}`);
+  const clkName = cfg.DdsMcoClockName || 'HSE 8 MHz (/1)';
+  const resHz = (cfg.DdsResolutionHz || 0.029802).toFixed(6);
+  log('ok', `Config loaded: Source=${srcName} · MCO Clock=${clkName} (Res: ${resHz} Hz) · Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · loss=${cfg.SignalLossName}`);
 }
 
 const LOCK_STATES = {
@@ -276,6 +304,7 @@ function setUiConnected(connected) {
   els.applyCfgBtn.disabled = !connected || !state.config;
   els.saveCfgBtn.disabled = !connected;
   els.loadCfgBtn.disabled = !connected;
+  if (els.resetEepromBtn) els.resetEepromBtn.disabled = !connected;
   if (els.manualDacSlider) els.manualDacSlider.disabled = !connected;
   if (els.manualDacInput) els.manualDacInput.disabled = !connected;
   if (els.manualSetBtn) els.manualSetBtn.disabled = !connected;
@@ -526,6 +555,12 @@ function onApplyConfig() {
   if (els.generatorSourceInput) {
     patch.GeneratorSource = parseInt(els.generatorSourceInput.value, 10);
   }
+  if (els.ddsMcoClockInput) {
+    const clk = parseInt(els.ddsMcoClockInput.value, 10);
+    if (!isNaN(clk) && clk >= 0 && clk <= 6) {
+      patch.DdsMcoClock = clk;
+    }
+  }
   const ddsCenter = num(els.ddsCenterInput);
   if (ddsCenter !== null && ddsCenter >= 1000 && ddsCenter <= 500000) patch.DdsCenterFreq = ddsCenter;
   const ddsMin = num(els.ddsMinInput);
@@ -554,12 +589,30 @@ function onLoadConfig() {
   log('info', 'Loading configuration from EEPROM…');
 }
 
-function onEepromActionResult(isSave, success) {
-  if (isSave) {
+function onResetEeprom() {
+  if (!state.connected) { log('warn', 'Not connected'); return; }
+  const confirmed = confirm(
+    'Reset EEPROM Configuration?\n\n' +
+    'This will erase saved parameters from the 24LC16B EEPROM and revert the controller and DDS to factory baseline defaults.\n\n' +
+    'Are you sure you want to proceed?'
+  );
+  if (!confirmed) return;
+  call('ResetEepromConfiguration');
+  log('warn', 'Resetting EEPROM to factory defaults…');
+}
+
+function onEepromActionResult(action, success) {
+  if (action === 'save' || action === true) {
     if (success) {
       log('ok', 'EEPROM: Configuration successfully saved to 24LC16B!');
     } else {
       log('error', 'EEPROM: Failed to save configuration!');
+    }
+  } else if (action === 'reset') {
+    if (success) {
+      log('ok', 'EEPROM: Configuration successfully reset to factory defaults!');
+    } else {
+      log('error', 'EEPROM: Failed to reset configuration in EEPROM!');
     }
   } else {
     if (success) {
@@ -661,11 +714,18 @@ let _currentGeneratorSource = '0';
 
 function updateGeneratorSourceUI(source) {
   const isDds = source === 1 || source === '1';
+  if (els.ddsMcoClockField) els.ddsMcoClockField.classList.toggle('field-highlight', isDds);
   if (els.ddsCenterField) els.ddsCenterField.classList.toggle('field-highlight', isDds);
   if (els.ddsMinField) els.ddsMinField.classList.toggle('field-highlight', isDds);
   if (els.ddsMaxField) els.ddsMaxField.classList.toggle('field-highlight', isDds);
   if (els.kpUnit) els.kpUnit.textContent = isDds ? '(Hz/ns)' : '(V/ns)';
   selectManualTab(isDds ? 'dds' : 'dac');
+}
+
+if (els.ddsMcoClockInput) {
+  els.ddsMcoClockInput.addEventListener('change', () => {
+    updateMcoClockHint(parseInt(els.ddsMcoClockInput.value, 10));
+  });
 }
 
 if (els.generatorSourceInput) {
@@ -709,6 +769,7 @@ function fmt(value, decimals) {
 els.applyCfgBtn.addEventListener('click', onApplyConfig);
 els.saveCfgBtn.addEventListener('click', onSaveConfig);
 els.loadCfgBtn.addEventListener('click', onLoadConfig);
+if (els.resetEepromBtn) els.resetEepromBtn.addEventListener('click', onResetEeprom);
 els.resetLoopBtn.addEventListener('click', onResetLoop);
 els.runLoopBtn.addEventListener('click', onRunLoop);
 els.shutdownBtn.addEventListener('click', onShutdown);

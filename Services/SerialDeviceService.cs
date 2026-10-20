@@ -67,12 +67,13 @@ public sealed class SerialDeviceService : IDisposable
         Opcode.GET_STREAM_PERIOD, Opcode.GET_SIGNAL_LOSS_BEHAVIOR,
         Opcode.GET_MANUAL_MODE,
         Opcode.GET_GENERATOR_SOURCE, Opcode.GET_DDS_FREQ_BOUNDS, Opcode.GET_DDS_CENTER_FREQ,
+        Opcode.GET_DDS_MCO_CLOCK,
     };
 
     public event Action<DpllTelemetry>? TelemetryReceived;
     public event Action<DeviceConnectionState, string?>? ConnectionChanged;
     public event Action<DpllConfiguration>? ConfigurationReceived;
-    public event Action<bool, bool>? EepromActionCompleted; // (isSave, success)
+    public event Action<string, bool>? EepromActionCompleted; // (action: "save" | "load" | "reset", success)
 
     public SerialDeviceService(IOptionsMonitor<SerialOptions> optionsMonitor, ILogger<SerialDeviceService> logger)
     {
@@ -447,6 +448,12 @@ public sealed class SerialDeviceService : IDisposable
                     SetConfigValue(c => c.DdsCenterFreq = v);
                     break;
                 }
+                case Opcode.GET_DDS_MCO_CLOCK:
+                {
+                    int clk = payload.Length > 0 ? payload[0] : 0;
+                    SetConfigValue(c => c.DdsMcoClock = clk);
+                    break;
+                }
                 case Opcode.GET_VOLTAGE:
                     // Not part of the config snapshot (telemetry covers DAC V).
                     break;
@@ -472,7 +479,7 @@ public sealed class SerialDeviceService : IDisposable
                     bool ok = payload.Length > 0 && payload[0] != 0;
                     _logger.LogInformation("SAVE_CONFIG_EEPROM reply from firmware: {Result}", ok ? "SUCCESS" : "FAILED");
                     CompletePendingGet(opcode);
-                    try { EepromActionCompleted?.Invoke(true, ok); }
+                    try { EepromActionCompleted?.Invoke("save", ok); }
                     catch (Exception ex) { _logger.LogError(ex, "EepromActionCompleted handler threw."); }
                     break;
                 }
@@ -482,7 +489,18 @@ public sealed class SerialDeviceService : IDisposable
                     bool ok = payload.Length > 0 && payload[0] != 0;
                     _logger.LogInformation("LOAD_CONFIG_EEPROM reply from firmware: {Result}", ok ? "SUCCESS" : "FAILED");
                     CompletePendingGet(opcode);
-                    try { EepromActionCompleted?.Invoke(false, ok); }
+                    try { EepromActionCompleted?.Invoke("load", ok); }
+                    catch (Exception ex) { _logger.LogError(ex, "EepromActionCompleted handler threw."); }
+                    RefreshConfiguration();
+                    break;
+                }
+
+                case Opcode.RESET_CONFIG_EEPROM:
+                {
+                    bool ok = payload.Length > 0 && payload[0] != 0;
+                    _logger.LogInformation("RESET_CONFIG_EEPROM reply from firmware: {Result}", ok ? "SUCCESS" : "FAILED");
+                    CompletePendingGet(opcode);
+                    try { EepromActionCompleted?.Invoke("reset", ok); }
                     catch (Exception ex) { _logger.LogError(ex, "EepromActionCompleted handler threw."); }
                     RefreshConfiguration();
                     break;
@@ -741,6 +759,8 @@ public sealed class SerialDeviceService : IDisposable
             BinaryPrimitives.WriteSingleLittleEndian(bounds.AsSpan(4, 4), maxF);
             SendBinary(Opcode.SET_DDS_FREQ_BOUNDS, bounds);
         }
+        if (patch.DdsMcoClock.HasValue)
+            SendBinary(Opcode.SET_DDS_MCO_CLOCK, [(byte)patch.DdsMcoClock.Value]);
 
         RefreshConfiguration();
     }
@@ -757,6 +777,9 @@ public sealed class SerialDeviceService : IDisposable
     /// <summary>Manual DDS output frequency (disables the loop).</summary>
     public void SetManualFrequency(double freqHz) => SendBinary(Opcode.SET_DDS_MANUAL_FREQ, DpllProtocol.EncodeFloat((float)freqHz));
 
+    /// <summary>Set DDS MCO clock preset (0-6).</summary>
+    public void SetDdsMcoClock(int clockIndex) => SendBinary(Opcode.SET_DDS_MCO_CLOCK, [(byte)clockIndex]);
+
     /// <summary>Re-enable automatic control (manual mode off).</summary>
     public void RunLoop() => SendBinary(Opcode.SET_ENABLE_LOOP, [1]);
 
@@ -765,6 +788,9 @@ public sealed class SerialDeviceService : IDisposable
 
     /// <summary>Load saved configuration from 24LC16B EEPROM and apply it.</summary>
     public void LoadConfigurationFromEeprom() => SendBinary(Opcode.LOAD_CONFIG_EEPROM, default);
+
+    /// <summary>Reset configuration in 24LC16B EEPROM and revert controller to factory defaults.</summary>
+    public void ResetEepromConfiguration() => SendBinary(Opcode.RESET_CONFIG_EEPROM, default);
 
     public void Dispose()
     {

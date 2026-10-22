@@ -43,6 +43,7 @@ public sealed class SerialDeviceService : IDisposable
     private CancellationTokenSource? _readCts;
     private Task? _readTask;
     private string? _requestedPort;
+    private string? _activePort;
     private bool _streamEnabled;
 
     private DeviceConnectionState _state = DeviceConnectionState.Disconnected;
@@ -67,7 +68,7 @@ public sealed class SerialDeviceService : IDisposable
         Opcode.GET_STREAM_PERIOD, Opcode.GET_SIGNAL_LOSS_BEHAVIOR,
         Opcode.GET_MANUAL_MODE,
         Opcode.GET_GENERATOR_SOURCE, Opcode.GET_DDS_FREQ_BOUNDS, Opcode.GET_DDS_CENTER_FREQ,
-        Opcode.GET_DDS_MCO_CLOCK,
+        Opcode.GET_DDS_MCO_CLOCK, Opcode.GET_CAPTURE_EDGE, Opcode.GET_TRACKING_DIR,
     };
 
     public event Action<DpllTelemetry>? TelemetryReceived;
@@ -134,7 +135,7 @@ public sealed class SerialDeviceService : IDisposable
     public DeviceConnectionState State => _state;
 
     /// <summary>The COM port in use (or being connected to).</summary>
-    public string? PortName => _requestedPort;
+    public string? PortName => _activePort ?? _requestedPort;
 
     /// <summary>Latest telemetry sample, or null if none received yet.</summary>
     public DpllTelemetry? Latest => _latest;
@@ -147,6 +148,9 @@ public sealed class SerialDeviceService : IDisposable
 
     /// <summary>List detected serial ports.</summary>
     public static IReadOnlyList<string> GetAvailablePorts() => SerialPort.GetPortNames();
+
+    /// <summary>List detected serial ports along with Windows FriendlyNames.</summary>
+    public static IReadOnlyList<(string Port, string Description)> GetPortDetails() => DpllPortFinder.GetPortDetails();
 
     // ------------------------------------------------------------------
     // Connection management
@@ -186,17 +190,28 @@ public sealed class SerialDeviceService : IDisposable
 
         while (!_disposed && !string.IsNullOrEmpty(_requestedPort))
         {
-            string port = _requestedPort;
+            string req = _requestedPort;
+            bool isAuto = string.Equals(req, "AUTO", StringComparison.OrdinalIgnoreCase)
+                          || string.Equals(req, "DPLL", StringComparison.OrdinalIgnoreCase);
+
+            string? targetPort = isAuto ? DpllPortFinder.FindPort() : req;
+
             try
             {
-                SetState(DeviceConnectionState.Connecting, port);
-
-                if (!SerialPort.GetPortNames().Contains(port, StringComparer.OrdinalIgnoreCase))
+                if (isAuto && string.IsNullOrEmpty(targetPort))
                 {
-                    throw new IOException($"Port '{port}' is not available.");
+                    SetState(DeviceConnectionState.Connecting, "Auto-scanning for DPLL device...");
+                    throw new IOException("DPLL device not detected on any USB port.");
                 }
 
-                var portObj = new SerialPort(port, _options.BaudRate, Parity.None, 8, StopBits.One)
+                SetState(DeviceConnectionState.Connecting, targetPort);
+
+                if (!SerialPort.GetPortNames().Contains(targetPort, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new IOException($"Port '{targetPort}' is not available.");
+                }
+
+                var portObj = new SerialPort(targetPort!, _options.BaudRate, Parity.None, 8, StopBits.One)
                 {
                     ReadTimeout = 1000,
                     WriteTimeout = 1000,
@@ -208,6 +223,7 @@ public sealed class SerialDeviceService : IDisposable
                 lock (_writeLock)
                 {
                     _port = portObj;
+                    _activePort = targetPort;
                 }
                 _rxBuffer.Clear();
 
@@ -215,7 +231,7 @@ public sealed class SerialDeviceService : IDisposable
                 _readTask = Task.Run(() => ReadLoopAsync(portObj, _readCts.Token));
 
                 _streamEnabled = false;
-                _logger.LogInformation("Connected to {Port}. Running startup sequence: version probe → config refresh → stream enable.", port);
+                _logger.LogInformation("Connected to {Port} (Mode: {Req}). Running startup sequence: version probe → config refresh → stream enable.", targetPort, req);
                 UpdateConnectionState();
 
                 // Startup order: 1) GET_VERSION probe first to confirm the binary
@@ -229,7 +245,7 @@ public sealed class SerialDeviceService : IDisposable
             catch (Exception ex)
             {
                 _logger.LogWarning("Failed to connect to {Port}: {Message}. Retrying in {Delay} ms...",
-                    port, ex.Message, _options.ReconnectDelayMs);
+                    targetPort ?? req, ex.Message, _options.ReconnectDelayMs);
                 ClosePort();
                 SetState(DeviceConnectionState.Error, ex.Message);
 
@@ -248,6 +264,7 @@ public sealed class SerialDeviceService : IDisposable
         {
             var p = _port;
             _port = null;
+            _activePort = null;
             try { p?.Close(); } catch { /* ignore */ }
             try { p?.Dispose(); } catch { /* ignore */ }
         }
@@ -267,12 +284,12 @@ public sealed class SerialDeviceService : IDisposable
         if (!string.IsNullOrEmpty(_requestedPort) && !up)
         {
             next = _port is null ? DeviceConnectionState.Connecting : DeviceConnectionState.Error;
-            detail = _requestedPort;
+            detail = _activePort ?? _requestedPort;
         }
         else if (up)
         {
             next = DeviceConnectionState.Connected;
-            detail = _requestedPort;
+            detail = _activePort ?? _requestedPort;
         }
         else
         {
@@ -452,6 +469,22 @@ public sealed class SerialDeviceService : IDisposable
                 {
                     int clk = payload.Length > 0 ? payload[0] : 0;
                     SetConfigValue(c => c.DdsMcoClock = clk);
+                    break;
+                }
+                case Opcode.GET_CAPTURE_EDGE:
+                {
+                    if (payload.Length >= 2)
+                    {
+                        int refE = payload[0];
+                        int zcdE = payload[1];
+                        SetConfigValue(c => { c.CaptureRefEdge = refE; c.CaptureZcdEdge = zcdE; });
+                    }
+                    break;
+                }
+                case Opcode.GET_TRACKING_DIR:
+                {
+                    int dir = payload.Length > 0 ? payload[0] : 0;
+                    SetConfigValue(c => c.TrackingDirection = dir);
                     break;
                 }
                 case Opcode.GET_VOLTAGE:
@@ -761,6 +794,14 @@ public sealed class SerialDeviceService : IDisposable
         }
         if (patch.DdsMcoClock.HasValue)
             SendBinary(Opcode.SET_DDS_MCO_CLOCK, [(byte)patch.DdsMcoClock.Value]);
+        if (patch.CaptureRefEdge.HasValue || patch.CaptureZcdEdge.HasValue)
+        {
+            byte refE = (byte)(patch.CaptureRefEdge ?? _config?.CaptureRefEdge ?? 0);
+            byte zcdE = (byte)(patch.CaptureZcdEdge ?? _config?.CaptureZcdEdge ?? 0);
+            SendBinary(Opcode.SET_CAPTURE_EDGE, [refE, zcdE]);
+        }
+        if (patch.TrackingDirection.HasValue)
+            SendBinary(Opcode.SET_TRACKING_DIR, [(byte)patch.TrackingDirection.Value]);
 
         RefreshConfiguration();
     }
@@ -779,6 +820,12 @@ public sealed class SerialDeviceService : IDisposable
 
     /// <summary>Set DDS MCO clock preset (0-6).</summary>
     public void SetDdsMcoClock(int clockIndex) => SendBinary(Opcode.SET_DDS_MCO_CLOCK, [(byte)clockIndex]);
+
+    /// <summary>Set input capture edge polarity (0=Rising, 1=Falling, 2=Both).</summary>
+    public void SetCaptureEdges(int refEdge, int zcdEdge) => SendBinary(Opcode.SET_CAPTURE_EDGE, [(byte)refEdge, (byte)zcdEdge]);
+
+    /// <summary>Set tracking direction (0=Normal fs Series, 1=Inverted fp Parallel).</summary>
+    public void SetTrackingDirection(int dir) => SendBinary(Opcode.SET_TRACKING_DIR, [(byte)dir]);
 
     /// <summary>Re-enable automatic control (manual mode off).</summary>
     public void RunLoop() => SendBinary(Opcode.SET_ENABLE_LOOP, [1]);

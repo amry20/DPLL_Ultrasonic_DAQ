@@ -94,6 +94,9 @@ public class DpllHub : Hub
     /// <summary>Load saved configuration from 24LC16B EEPROM and apply it.</summary>
     public void LoadConfigurationFromEeprom() => _device.LoadConfigurationFromEeprom();
 
+    /// <summary>Set input capture edge polarity (0=Rising, 1=Falling, 2=Both).</summary>
+    public void SetCaptureEdges(int refEdge, int zcdEdge) => _device.SetCaptureEdges(refEdge, zcdEdge);
+
     /// <summary>Reset configuration in 24LC16B EEPROM and restore defaults.</summary>
     public void ResetEepromConfiguration() => _device.ResetEepromConfiguration();
 }

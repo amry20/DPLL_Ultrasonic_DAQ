@@ -97,6 +97,9 @@ const els = {
   timeoutInput: $('timeoutInput'),
   streamInput: $('streamInput'),
   lossInput: $('lossInput'),
+  refEdgeInput: $('refEdgeInput'),
+  zcdEdgeInput: $('zcdEdgeInput'),
+  trackingDirInput: $('trackingDirInput'),
   resetLoopBtn: $('resetLoopBtn'),
   runLoopBtn: $('runLoopBtn'),
   shutdownBtn: $('shutdownBtn'),
@@ -108,10 +111,12 @@ const els = {
   manualDacInput: $('manualDacInput'),
   manualDacValue: $('manualDacValue'),
   manualSetBtn: $('manualSetBtn'),
+  resumeLoopDacBtn: $('resumeLoopDacBtn'),
   manualDdsSlider: $('manualDdsSlider'),
   manualDdsInput: $('manualDdsInput'),
   manualDdsValue: $('manualDdsValue'),
   manualDdsSetBtn: $('manualDdsSetBtn'),
+  resumeLoopDdsBtn: $('resumeLoopDdsBtn'),
   log: $('log'),
   clearLogBtn: $('clearLogBtn'),
 };
@@ -257,6 +262,15 @@ function onConfiguration(cfg) {
   els.timeoutInput.value = cfg.LockMemoryTimeoutMs;
   els.streamInput.value = cfg.StreamPeriodMs;
   els.lossInput.value = cfg.SignalLossBehavior;
+  if (els.refEdgeInput && cfg.CaptureRefEdge !== undefined) {
+    els.refEdgeInput.value = String(cfg.CaptureRefEdge);
+  }
+  if (els.zcdEdgeInput && cfg.CaptureZcdEdge !== undefined) {
+    els.zcdEdgeInput.value = String(cfg.CaptureZcdEdge);
+  }
+  if (els.trackingDirInput && cfg.TrackingDirection !== undefined) {
+    els.trackingDirInput.value = String(cfg.TrackingDirection);
+  }
   els.applyCfgBtn.disabled = !state.connected;
   els.loopValue.textContent = cfg.LoopPeriodMs;
 
@@ -264,7 +278,10 @@ function onConfiguration(cfg) {
   const srcName = cfg.GeneratorSource === 1 ? 'DDS (AD9833)' : 'DAC (CD4046 VCO)';
   const clkName = cfg.DdsMcoClockName || 'HSE 8 MHz (/1)';
   const resHz = (cfg.DdsResolutionHz || 0.029802).toFixed(6);
-  log('ok', `Config loaded: Source=${srcName} · MCO Clock=${clkName} (Res: ${resHz} Hz) · Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · loss=${cfg.SignalLossName}`);
+  const refEdge = cfg.CaptureRefEdgeName || 'Rising';
+  const zcdEdge = cfg.CaptureZcdEdgeName || 'Rising';
+  const trackDir = cfg.TrackingDirectionName || 'Normal (Series fs)';
+  log('ok', `Config loaded: Source=${srcName} · MCO Clock=${clkName} (Res: ${resHz} Hz) · Edges: REF=${refEdge}, ZCD=${zcdEdge} · Direction=${trackDir} · Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · loss=${cfg.SignalLossName}`);
 }
 
 const LOCK_STATES = {
@@ -272,6 +289,7 @@ const LOCK_STATES = {
   1: { text: 'WAIT ZCD', cls: 'error' },
   2: { text: 'TRACK', cls: 'track' },
   3: { text: 'LOCK', cls: 'lock' },
+  4: { text: 'MANUAL TEST', cls: 'warn' },
 };
 
 function onConnectionState(code, port) {
@@ -309,9 +327,11 @@ function setUiConnected(connected) {
   if (els.manualDacSlider) els.manualDacSlider.disabled = !connected;
   if (els.manualDacInput) els.manualDacInput.disabled = !connected;
   if (els.manualSetBtn) els.manualSetBtn.disabled = !connected;
+  if (els.resumeLoopDacBtn) els.resumeLoopDacBtn.disabled = !connected;
   if (els.manualDdsSlider) els.manualDdsSlider.disabled = !connected;
   if (els.manualDdsInput) els.manualDdsInput.disabled = !connected;
   if (els.manualDdsSetBtn) els.manualDdsSetBtn.disabled = !connected;
+  if (els.resumeLoopDdsBtn) els.resumeLoopDdsBtn.disabled = !connected;
   els.startLogBtn.disabled = !connected || state.logging;
   if (!connected) {
     state.telemetry = null;
@@ -346,23 +366,25 @@ function updateStatus(t) {
   }
 
   const isDdsActive = (t.DdsStatus & 0x80) !== 0;
-  const ddsHwStatus = t.DdsStatus & 0x7F;
+  const isInverted = (t.DdsStatus & 0x40) !== 0; // tracking direction INVERTED
+  const ddsHwStatus = t.DdsStatus & 0x3F;
+  const dirTag = isInverted ? ' · DIR INV' : ' · DIR NORM';
 
   if (isDdsActive) {
     if (ddsHwStatus === 2) {
-      setDdsBadge('ok', 'DDS ACTIVE · SIG OK');
+      setDdsBadge('ok', 'DDS ACTIVE · SIG OK' + dirTag);
     } else if (ddsHwStatus === 1) {
-      setDdsBadge('ok', 'DDS ACTIVE');
+      setDdsBadge('ok', 'DDS ACTIVE' + dirTag);
     } else {
-      setDdsBadge('danger', 'DDS ERR');
+      setDdsBadge('danger', 'DDS ERR' + dirTag);
     }
   } else {
     if (ddsHwStatus === 2) {
-      setDdsBadge('ok', 'AD9833 READY (SIG)');
+      setDdsBadge('ok', 'AD9833 READY (SIG)' + dirTag);
     } else if (ddsHwStatus === 1) {
-      setDdsBadge('ok', 'AD9833 READY');
+      setDdsBadge('ok', 'AD9833 READY' + dirTag);
     } else {
-      setDdsBadge('danger', 'AD9833 ERR');
+      setDdsBadge('danger', 'AD9833 ERR' + dirTag);
     }
   }
 }
@@ -552,6 +574,16 @@ function onApplyConfig() {
   if (timeout !== null && timeout >= 0) patch.LockMemoryTimeoutMs = timeout;
   if (stream !== null && stream >= 1 && stream <= 65535) patch.StreamPeriodMs = stream;
   patch.SignalLossBehavior = loss;
+
+  if (els.refEdgeInput) {
+    patch.CaptureRefEdge = parseInt(els.refEdgeInput.value, 10);
+  }
+  if (els.zcdEdgeInput) {
+    patch.CaptureZcdEdge = parseInt(els.zcdEdgeInput.value, 10);
+  }
+  if (els.trackingDirInput) {
+    patch.TrackingDirection = parseInt(els.trackingDirInput.value, 10);
+  }
 
   if (els.generatorSourceInput) {
     patch.GeneratorSource = parseInt(els.generatorSourceInput.value, 10);
@@ -790,6 +822,8 @@ if (els.tabManualDac) els.tabManualDac.addEventListener('click', () => selectMan
 if (els.tabManualDds) els.tabManualDds.addEventListener('click', () => selectManualTab('dds'));
 
 if (els.manualDdsSetBtn) els.manualDdsSetBtn.addEventListener('click', onManualDdsSet);
+if (els.resumeLoopDacBtn) els.resumeLoopDacBtn.addEventListener('click', onRunLoop);
+if (els.resumeLoopDdsBtn) els.resumeLoopDdsBtn.addEventListener('click', onRunLoop);
 if (els.manualDdsSlider) els.manualDdsSlider.addEventListener('input', onManualDdsSlider);
 if (els.manualDdsInput) {
   els.manualDdsInput.addEventListener('input', onManualDdsInput);

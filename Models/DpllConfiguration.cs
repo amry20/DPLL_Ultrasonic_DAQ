@@ -103,4 +103,36 @@ public sealed class DpllConfiguration
         6 => 4000000.0 / 268435456.0,
         _ => 8000000.0 / 268435456.0
     };
+
+    /// <summary>Reference signal capture edge polarity: 0=Rising, 1=Falling, 2=Both.</summary>
+    public int CaptureRefEdge { get; set; } = 0;
+
+    /// <summary>Feedback / ZCD capture edge polarity: 0=Rising, 1=Falling, 2=Both.</summary>
+    public int CaptureZcdEdge { get; set; } = 0;
+
+    /// <summary>Name of reference capture edge.</summary>
+    public string CaptureRefEdgeName => CaptureRefEdge switch
+    {
+        1 => "Falling",
+        2 => "Both",
+        _ => "Rising"
+    };
+
+    /// <summary>Name of feedback/ZCD capture edge.</summary>
+    public string CaptureZcdEdgeName => CaptureZcdEdge switch
+    {
+        1 => "Falling",
+        2 => "Both",
+        _ => "Rising"
+    };
+
+    /// <summary>Control loop tracking direction: 0 = Normal (Series fs resonance), 1 = Inverted (Parallel fp resonance / inverting transfer function).</summary>
+    public int TrackingDirection { get; set; } = 0;
+
+    /// <summary>Name of tracking direction.</summary>
+    public string TrackingDirectionName => TrackingDirection switch
+    {
+        1 => "Inverted (Parallel fp)",
+        _ => "Normal (Series fs)"
+    };
 }

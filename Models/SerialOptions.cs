@@ -6,10 +6,10 @@ public sealed class SerialOptions
     public const string SectionName = "Serial";
 
     /// <summary>
-    /// Serial COM port name (e.g. COM9) — the port the firmware uses for BOTH
-    /// the binary telemetry stream and ASCII tuning commands. Empty = disabled.
+    /// Serial COM port name (e.g. COM9, or "AUTO" to auto-detect the DPLL USB device).
+    /// Empty = disabled.
     /// </summary>
-    public string? PortName { get; set; }
+    public string? PortName { get; set; } = "AUTO";
 
     /// <summary>Baud rate, defaults to the firmware's 115200.</summary>
     public int BaudRate { get; set; } = 115200;

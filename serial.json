@@ -1,6 +1,6 @@
 {
   "Serial": {
-    "PortName": "COM9",
+    "PortName": "AUTO",
     "BaudRate": 115200,
     "ReconnectDelayMs": 2000,
     "StreamTimeoutMs": 1000

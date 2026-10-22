@@ -24,4 +24,7 @@ public sealed class DpllConfigurationPatch
     public double? DdsMinFreq { get; set; }
     public double? DdsMaxFreq { get; set; }
     public int? DdsMcoClock { get; set; }
+    public int? CaptureRefEdge { get; set; }
+    public int? CaptureZcdEdge { get; set; }
+    public int? TrackingDirection { get; set; }
 }

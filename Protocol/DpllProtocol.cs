@@ -59,6 +59,10 @@ public static class Opcode
     public const ushort SET_DDS_MCO_CLOCK   = 0x0033;
     public const ushort GET_DDS_MCO_CLOCK   = 0x0034;
     public const ushort RESET_CONFIG_EEPROM = 0x0035;
+    public const ushort SET_CAPTURE_EDGE    = 0x0036;
+    public const ushort GET_CAPTURE_EDGE    = 0x0037;
+    public const ushort SET_TRACKING_DIR    = 0x0038;
+    public const ushort GET_TRACKING_DIR    = 0x0039;
 }
 
 /// <summary>

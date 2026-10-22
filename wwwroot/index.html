@@ -197,6 +197,29 @@
             <option value="2">Zero</option>
           </select>
         </div>
+        <div class="field">
+          <label for="refEdgeInput">REF Edge (PA0 Capture)</label>
+          <select id="refEdgeInput">
+            <option value="0">Rising Edge</option>
+            <option value="1">Falling Edge</option>
+            <option value="2">Both Edges</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="zcdEdgeInput">Feedback / ZCD Edge (PA1 Capture)</label>
+          <select id="zcdEdgeInput">
+            <option value="0">Rising Edge</option>
+            <option value="1">Falling Edge</option>
+            <option value="2">Both Edges</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="trackingDirInput">Tracking Direction (Control Loop)</label>
+          <select id="trackingDirInput">
+            <option value="0">Normal (Series fs Resonance / Non-inverting)</option>
+            <option value="1">Inverted (Parallel fp Resonance / Inverting)</option>
+          </select>
+        </div>
       </div>
 
       <div class="control-actions">
@@ -216,7 +239,7 @@
 
       <div class="manual-box" id="manualDacBox">
         <div class="manual-head">
-          <span>Manual DAC Voltage Control</span>
+          <span>Manual DAC Voltage (Open-Loop Test)</span>
           <span class="manual-value mono" id="manualDacValue">0.00 V</span>
         </div>
         <div class="manual-slider-row">
@@ -224,14 +247,15 @@
           <input id="manualDacInput" type="number" min="0" max="3.3" step="0.01" value="0.00" class="manual-num-input" disabled />
         </div>
         <div class="manual-foot">
-          <button id="manualSetBtn" class="btn btn-warn" disabled>Set manual voltage</button>
-          <span class="hint">Setting a manual voltage disengages the loop.</span>
+          <button id="manualSetBtn" class="btn btn-warn" disabled>Set Fixed Voltage (Loop OFF)</button>
+          <button id="resumeLoopDacBtn" class="btn btn-success" disabled>Resume Closed Loop</button>
+          <span class="hint">Disengages DPLL loop for static voltage testing.</span>
         </div>
       </div>
 
       <div class="manual-box" id="manualDdsBox" hidden>
         <div class="manual-head">
-          <span>Manual DDS Frequency Control</span>
+          <span>Manual DDS Frequency (Open-Loop Test)</span>
           <span class="manual-value mono" id="manualDdsValue">28000.00 Hz</span>
         </div>
         <div class="manual-slider-row">
@@ -239,8 +263,9 @@
           <input id="manualDdsInput" type="number" min="1000" max="500000" step="0.1" value="28000" class="manual-num-input" disabled />
         </div>
         <div class="manual-foot">
-          <button id="manualDdsSetBtn" class="btn btn-warn" disabled>Set manual frequency</button>
-          <span class="hint">Setting a manual frequency disengages the loop.</span>
+          <button id="manualDdsSetBtn" class="btn btn-warn" disabled>Set Fixed Frequency (Loop OFF)</button>
+          <button id="resumeLoopDdsBtn" class="btn btn-success" disabled>Resume Closed Loop</button>
+          <span class="hint">Disengages DPLL loop for static frequency testing.</span>
         </div>
       </div>
     </section>

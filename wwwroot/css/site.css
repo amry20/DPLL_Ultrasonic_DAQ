@@ -163,9 +163,9 @@ select option { background: var(--bg-panel); }
   .layout {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
-  .status-panel, .charts-panel { grid-column: 1 / -1; }
+  .status-panel, .charts-panel, .cal-panel { grid-column: 1 / -1; }
   .control-panel { grid-column: 1; }
-  .log-panel { grid-column: 2; }
+  .log-panel { grid-column: 2; min-height: 480px; }
 }
 
 .panel {
@@ -420,7 +420,7 @@ select option { background: var(--bg-panel); }
 .log-panel .panel-head { flex-shrink: 0; }
 .log {
   flex: 1 1 auto;
-  min-height: 220px; /* mobile: natural height with internal scroll */
+  min-height: 380px; /* mobile: comfortable reading height with internal scroll */
   overflow-y: auto;
   background: var(--bg);
   border: 1px solid var(--border-soft);

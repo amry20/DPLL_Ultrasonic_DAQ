@@ -122,6 +122,20 @@ test('source modal cancel returns to the confirmed bank without writing', () => 
   assert.equal(f.calls.length, 0);
 });
 
+test('switching to PWM Dither triggers critical hardware verification warning modal', () => {
+  const f = fixture(); // confirmed is 0 (DAC)
+  f.element('generatorSourceInput').value = '2';
+  f.element('generatorSourceInput').listeners.change();
+  assert.equal(f.element('jumperModal').hidden, false);
+  assert.match(f.element('modalSourceText').textContent, /PWM Dither/);
+  assert.match(f.element('modalReqText').innerHTML, /PA8/);
+  assert.match(f.element('modalReqText').innerHTML, /PA0/);
+  assert.match(f.element('modalReqText').innerHTML, /Gate Driver/);
+  f.element('modalConfirmBtn').listeners.click();
+  assert.equal(f.element('jumperModal').hidden, true);
+  assert.match(f.logs.at(-1).message, /PWM Dither/);
+});
+
 test('negative gains are rejected visibly; direction is an explicit field', async () => {
   const f = fixture();
   f.element('kpInput').value = '-0.000002';
@@ -224,21 +238,4 @@ test('zero lock threshold is rejected before sending a setter the firmware would
   assert.equal(f.calls.length, 0);
   assert.equal(f.logs.at(-1).level, 'error');
   assert.match(f.logs.at(-1).message, /LockThresholdNs/);
-});
-
-test('one-shot raw window export controls send diagnostic hub actions only', async () => {
-  const f = fixture();
-  await f.run('onArmRawWindow()');
-  assert.deepEqual(f.calls, [{ method: 'ArmRawWindow', patch: undefined }]);
-  assert.match(f.element('rawCaptureStatus').textContent, /Armed/);
-  f.context.hubInvoke = async (method) => {
-    f.calls.push({ method });
-    return { State: 2, WindowId: 7, SampleCount: 700,
-      AcceptedCount: 650, PidApplied: false, LoopPeriodMs: 20,
-      FilteredPhaseNs: 720.5, LockStatus: 2, Overflow: false };
-  };
-  await f.run('onCheckRawWindow()');
-  assert.equal(f.element('downloadRawBtn').disabled, false);
-  assert.match(f.element('rawCaptureStatus').textContent, /700 paired samples/);
-  assert.match(f.element('rawCaptureStatus').textContent, /FILTER HOLD/);
 });

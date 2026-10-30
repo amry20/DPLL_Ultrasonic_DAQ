@@ -105,29 +105,6 @@
       </div>
     </section>
 
-    <!-- ======================= Raw ZCD diagnostic capture ======================= -->
-    <section class="panel raw-capture-panel" aria-labelledby="rawCaptureTitle">
-      <div class="panel-head"><h2 id="rawCaptureTitle">Raw ZCD Sampling Export (Diagnostic)</h2></div>
-      <p class="raw-help">Arm one complete REF/ZCD capture window, then run a sonication pulse. After the pulse,
-        check the capture and download EVERY paired edge sample as CSV (up to 1,024 points/window).
-        This is different from the 10 ms telemetry log. No PID settings are changed.</p>
-      <div class="raw-controls">
-        <label for="rawConditionInput">Liquid / test condition</label>
-        <select id="rawConditionInput">
-          <option value="Fixed PSU Water 800ns">Fixed PSU - Water 800 ns</option>
-          <option value="Fixed PSU Resus + Swab Stick 800ns">Fixed PSU - Resus + Swab Stick 800 ns</option>
-          <option value="Other experimental condition">Other condition</option>
-        </select>
-        <button id="armRawBtn" class="btn btn-primary" disabled>1. Arm next window</button>
-        <button id="checkRawBtn" class="btn btn-ghost" disabled>2. Check capture</button>
-        <button id="downloadRawBtn" class="btn btn-success" disabled>3. Download raw CSV</button>
-      </div>
-      <div id="rawCaptureStatus" class="raw-status mono" role="status">Connect diagnostic firmware to enable capture.</div>
-      <p class="raw-help">Export after the excitation pulse to avoid serial transfer competing with tracking.
-        A new Arm command replaces the previous saved window. Window metadata includes filtered phase,
-        accepted count, trust flags, target, DAC before/after, and PID decision.</p>
-    </section>
-
     <!-- ======================= Control & config ======================= -->
     <section class="panel control-panel">
       <div class="panel-head">
@@ -143,11 +120,14 @@
         </div>
         <div class="field field-wide" id="sourceField">
           <label for="generatorSourceInput">DPLL Generator Source</label>
-          <select id="generatorSourceInput">
-            <option value="0">DAC (CD4046 External VCO)</option>
-            <option value="1">DDS (AD9833 Internal Synthesizer)</option>
-            <option value="2" selected>PWM Dither (STM32 TIM1 PA8)</option>
-          </select>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <select id="generatorSourceInput" style="flex: 1;">
+              <option value="0">DAC (CD4046 External VCO)</option>
+              <option value="1">DDS (AD9833 Internal Synthesizer)</option>
+              <option value="2" selected>PWM Dither (STM32 TIM1 PA8)</option>
+            </select>
+            <button type="button" id="sourceHardwareWarningBtn" class="btn btn-ghost" title="Inspect hardware connection requirements for this source" style="white-space: nowrap; font-size: 12px; padding: 6px 10px;">⚠️ Hardware Info</button>
+          </div>
           <small id="sourceChangeHint" class="hint">Gain values belong to the active generator source.</small>
         </div>
         <div class="field field-wide">
@@ -327,9 +307,9 @@
       <p>You are switching the DPLL Generator Source to <strong id="modalSourceText">DDS (AD9833)</strong>.</p>
       <div class="modal-alert">
         <strong>CRITICAL HARDWARE REQUIREMENT:</strong>
-        <span id="modalReqText">Ensure the physical resistor jumper on the PCB is routed to the <strong>AD9833 DDS output</strong>, NOT to the CD4046 VCO!</span>
+        <div id="modalReqText" style="margin-top: 6px; line-height: 1.5;">Ensure the physical resistor jumper on the PCB is routed to the <strong>AD9833 DDS output</strong>, NOT to the CD4046 VCO!</div>
       </div>
-      <p class="modal-sub">Operating without routing the hardware connections properly will leave the transducer without driving signals and break feedback tracking.</p>
+      <p class="modal-sub" id="modalSubText">Operating without routing the hardware connections properly will leave the transducer without driving signals and break feedback tracking.</p>
       <div class="modal-actions">
         <button id="modalCancelBtn" class="btn btn-ghost">Cancel</button>
         <button id="modalConfirmBtn" class="btn btn-danger">Confirm (Hardware Verified)</button>

@@ -67,11 +67,6 @@ const els = {
   logChip: $('logChip'),
   startLogBtn: $('startLogBtn'),
   stopLogBtn: $('stopLogBtn'),
-  armRawBtn: $('armRawBtn'),
-  checkRawBtn: $('checkRawBtn'),
-  downloadRawBtn: $('downloadRawBtn'),
-  rawConditionInput: $('rawConditionInput'),
-  rawCaptureStatus: $('rawCaptureStatus'),
   refreshCfgBtn: $('refreshCfgBtn'),
   applyCfgBtn: $('applyCfgBtn'),
   saveCfgBtn: $('saveCfgBtn'),
@@ -93,6 +88,7 @@ const els = {
   firmwareVersion: $('firmwareVersion'),
   configReadbackStatus: $('configReadbackStatus'),
   sourceChangeHint: $('sourceChangeHint'),
+  sourceHardwareWarningBtn: $('sourceHardwareWarningBtn'),
   trackingDirectionInput: $('trackingDirectionInput'),
   trackingDirectionStatus: $('trackingDirectionStatus'),
   referenceCaptureEdgeInput: $('referenceCaptureEdgeInput'),
@@ -101,6 +97,7 @@ const els = {
   modalTitleText: $('modalTitleText'),
   modalSourceText: $('modalSourceText'),
   modalReqText: $('modalReqText'),
+  modalSubText: $('modalSubText'),
   modalCancelBtn: $('modalCancelBtn'),
   modalConfirmBtn: $('modalConfirmBtn'),
   kpInput: $('kpInput'),
@@ -249,7 +246,9 @@ function onConfiguration(cfg) {
     return;
   }
   if (els.generatorSourceInput) {
-    els.generatorSourceInput.value = cfg.GeneratorSource !== undefined ? cfg.GeneratorSource : 0;
+    const src = cfg.GeneratorSource !== undefined ? cfg.GeneratorSource : 0;
+    els.generatorSourceInput.value = src;
+    currentConfirmedSource = Number(src);
   }
   if (els.ddsMcoClockInput && cfg.DdsMcoClock !== undefined) {
     els.ddsMcoClockInput.value = String(cfg.DdsMcoClock);
@@ -349,10 +348,6 @@ function setUiConnected(connected) {
   if (els.manualDdsInput) els.manualDdsInput.disabled = !connected;
   if (els.manualDdsSetBtn) els.manualDdsSetBtn.disabled = !connected;
   els.startLogBtn.disabled = !connected || state.logging;
-  els.armRawBtn.disabled = !connected;
-  els.checkRawBtn.disabled = !connected;
-  els.downloadRawBtn.disabled = !connected;
-  if (!connected) els.rawCaptureStatus.textContent = 'Disconnected: diagnostic capture unavailable.';
   if (!connected) {
     state.telemetry = null;
     state.config = null;
@@ -779,28 +774,59 @@ if (els.ddsMcoClockInput) {
   });
 }
 
+let currentConfirmedSource = Number(els.generatorSourceInput?.value ?? 2);
+
+function showSourceHardwareModal(targetSource) {
+  if (!els.jumperModal) return;
+  if (targetSource === 2) {
+    if (els.modalSourceText) els.modalSourceText.textContent = 'PWM Dither (STM32 TIM1 PA8)';
+    if (els.modalReqText) els.modalReqText.innerHTML =
+      'Ensure hardware wiring and routing jumpers are correctly configured:<br>' +
+      '• Pin <strong>PA8 (TIM1_CH1)</strong> must be connected to the Gate Driver input.<br>' +
+      '• A loopback wire/jumper from <strong>PA8 must be connected to PA0 (TIM2_CH1 REF input)</strong> for phase feedback.<br>' +
+      '• Physical resistor/jumper on the PCB must route <strong>PA8 (PWM Dither)</strong>, NOT AD9833 DDS or CD4046 VCO!';
+    if (els.modalSubText) els.modalSubText.textContent =
+      'Operating without routing PA8 to the gate driver and loopback wire to PA0 will leave the transducer without driving signals and break feedback tracking.';
+    els.jumperModal.hidden = false;
+  } else if (targetSource === 1) {
+    if (els.modalSourceText) els.modalSourceText.textContent = 'DDS (AD9833)';
+    if (els.modalReqText) els.modalReqText.innerHTML =
+      'Ensure the physical resistor jumper on the PCB is routed to the <strong>AD9833 DDS output</strong>, NOT to the CD4046 VCO or TIM1 PA8!';
+    if (els.modalSubText) els.modalSubText.textContent =
+      'Operating without routing the hardware connections properly will leave the transducer without driving signals and break feedback tracking.';
+    els.jumperModal.hidden = false;
+  } else if (targetSource === 0) {
+    if (els.modalSourceText) els.modalSourceText.textContent = 'DAC (CD4046 External VCO)';
+    if (els.modalReqText) els.modalReqText.innerHTML =
+      'Ensure DAC output is connected to the CD4046 VCO frequency control input and PCB selector jumper is routed to the CD4046 output!';
+    if (els.modalSubText) els.modalSubText.textContent =
+      'Operating without routing the hardware connections properly will leave the transducer without driving signals and break feedback tracking.';
+    els.jumperModal.hidden = false;
+  }
+}
+
 if (els.generatorSourceInput) {
   els.generatorSourceInput.addEventListener('change', () => {
     const selected = Number(els.generatorSourceInput.value);
-    const prevSource = state.config?.GeneratorSource ?? 0;
-    if (selected === 1 && prevSource !== 1 && els.jumperModal) {
-      if (els.modalSourceText) els.modalSourceText.textContent = 'DDS (AD9833)';
-      if (els.modalReqText) els.modalReqText.innerHTML = 'Ensure the physical resistor jumper on the PCB is routed to the <strong>AD9833 DDS output</strong>, NOT to the CD4046 VCO!';
-      els.jumperModal.hidden = false;
-    } else if (selected === 2 && prevSource !== 2 && els.jumperModal) {
-      if (els.modalSourceText) els.modalSourceText.textContent = 'PWM Dither (STM32 TIM1 PA8)';
-      if (els.modalReqText) els.modalReqText.innerHTML = 'Ensure <strong>PA8</strong> is connected to Gate Driver input AND loopback wire <strong>PA8 is connected to PA0</strong> (TIM2_CH1 REF input)!';
-      els.jumperModal.hidden = false;
+    if (selected !== currentConfirmedSource) {
+      showSourceHardwareModal(selected);
     }
     // Keep the displayed gain units tied to the last confirmed active source.
     updateConfigControls();
   });
 }
 
+if (els.sourceHardwareWarningBtn) {
+  els.sourceHardwareWarningBtn.addEventListener('click', () => {
+    const selected = Number(els.generatorSourceInput?.value ?? currentConfirmedSource);
+    showSourceHardwareModal(selected);
+  });
+}
+
 if (els.modalCancelBtn) {
   els.modalCancelBtn.addEventListener('click', () => {
     if (els.jumperModal) els.jumperModal.hidden = true;
-    els.generatorSourceInput.value = String(state.config?.GeneratorSource ?? 2);
+    els.generatorSourceInput.value = String(currentConfirmedSource);
     updateConfigControls();
     log('info', 'Generator source change cancelled');
   });
@@ -809,9 +835,11 @@ if (els.modalCancelBtn) {
 if (els.modalConfirmBtn) {
   els.modalConfirmBtn.addEventListener('click', () => {
     if (els.jumperModal) els.jumperModal.hidden = true;
+    currentConfirmedSource = Number(els.generatorSourceInput.value);
     updateConfigControls();
-    const sel = Number(els.generatorSourceInput.value);
-    const name = sel === 2 ? 'PWM Dither (TIM1 PA8)' : 'DDS (AD9833)';
+    const sel = currentConfirmedSource;
+    const names = { 0: 'DAC (CD4046)', 1: 'DDS (AD9833)', 2: 'PWM Dither (TIM1 PA8)' };
+    const name = names[sel] || 'Unknown';
     log('warn', `${name} selected. Check hardware wiring/jumpers, then Apply to switch source and read its gains.`);
   });
 }
@@ -855,76 +883,6 @@ els.pauseBtn.addEventListener('click', () => {
 });
 els.clearBtn.addEventListener('click', clearCharts);
 els.clearLogBtn.addEventListener('click', () => { els.log.innerHTML = ''; });
-
-// ---------------- Raw REF/ZCD diagnostic capture ----------------
-// Only ONE control window is stored in STM32 RAM at a time. No client-side
-// estimate is substituted for the true paired hardware timestamp records.
-function rawInfoSummary(info) {
-  if (!info) return 'No response from the firmware.';
-  if (info.State === 0) return 'Idle - click Arm next window.';
-  if (info.State === 1) return 'Armed - waiting for the next processed tracking window.';
-  if (info.State === 2) {
-    const pid = info.PidApplied ? 'PID applied' : 'FILTER HOLD (PID not applied)';
-    return `Window ${info.WindowId}: ${info.SampleCount} paired samples, ${info.AcceptedCount} accepted, ${pid}; loop ${info.LoopPeriodMs} ms, phase ${Number(info.FilteredPhaseNs).toFixed(1)} ns, state ${info.LockStatus}; overflow=${info.Overflow}`;
-  }
-  return 'Unknown firmware response.';
-}
-
-async function onArmRawWindow() {
-  if (!state.connected) return;
-  els.armRawBtn.disabled = true;
-  els.downloadRawBtn.disabled = true;
-  els.rawCaptureStatus.textContent = 'Arming next processed tracking window...';
-  try {
-    const ok = await call('ArmRawWindow');
-    els.rawCaptureStatus.textContent = ok ?
-      'Armed. Run a sonication pulse, then click Check capture (after the pulse).' :
-      'No ACK from firmware. Check the firmware version and connection.';
-    if (ok) log('ok', 'Raw capture armed for one window');
-  } finally {
-    els.armRawBtn.disabled = !state.connected;
-  }
-}
-
-async function onCheckRawWindow() {
-  if (!state.connected) return;
-  const info = await call('GetRawWindowInfo');
-  els.rawCaptureStatus.textContent = rawInfoSummary(info);
-  els.downloadRawBtn.disabled = !state.connected || !info || info.State !== 2;
-}
-
-async function onDownloadRawWindow() {
-  if (!state.connected) return;
-  els.downloadRawBtn.disabled = true;
-  els.rawCaptureStatus.textContent = 'Fetching raw data pages from firmware. Best done after pulse...';
-  const condition = els.rawConditionInput.value || 'Unknown';
-  try {
-    const csv = await call('ExportRawWindowCsv', condition);
-    if (!csv || !csv.startsWith('Condition,WindowId,')) {
-      els.rawCaptureStatus.textContent = 'Export failed: no valid captured window.';
-      return;
-    }
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    const safe = condition.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 60);
-    anchor.href = url;
-    anchor.download = `DPLL_raw_ZCD_${safe}_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-    const samples = csv.trimEnd().split('\n').length - 1;
-    els.rawCaptureStatus.textContent = `Raw CSV downloaded: ${samples} samples from one control window.`;
-    log('ok', `Raw ZCD CSV exported (${samples} samples)`);
-  } finally {
-    els.downloadRawBtn.disabled = !state.connected;
-  }
-}
-
-els.armRawBtn.addEventListener('click', onArmRawWindow);
-els.checkRawBtn.addEventListener('click', onCheckRawWindow);
-els.downloadRawBtn.addEventListener('click', onDownloadRawWindow);
 
 // ---------------- Logging control ----------------
 function setLoggingUi(active, file, rows) {

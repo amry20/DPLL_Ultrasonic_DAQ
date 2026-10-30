@@ -182,66 +182,143 @@ public sealed class SerialDeviceService : IDisposable
         SetState(DeviceConnectionState.Disconnected, null);
     }
 
+    private readonly object _connectLock = new();
+    private bool _isConnectingLoopRunning = false;
+
     private void TryOpenLoop()
     {
-        if (_disposed || string.IsNullOrEmpty(_requestedPort))
+        lock (_connectLock)
         {
-            return;
-        }
-
-        while (!_disposed && !string.IsNullOrEmpty(_requestedPort))
-        {
-            string port = _requestedPort;
-            try
+            if (_isConnectingLoopRunning)
             {
-                SetState(DeviceConnectionState.Connecting, port);
-
-                if (!SerialPort.GetPortNames().Contains(port, StringComparer.OrdinalIgnoreCase))
-                {
-                    throw new IOException($"Port '{port}' is not available.");
-                }
-
-                var portObj = new SerialPort(port, _options.BaudRate, Parity.None, 8, StopBits.One)
-                {
-                    ReadTimeout = 1000,
-                    WriteTimeout = 1000,
-                    DtrEnable = true,
-                    RtsEnable = true
-                };
-                portObj.Open();
-
-                lock (_writeLock)
-                {
-                    _port = portObj;
-                }
-                _rxBuffer.Clear();
-
-                _readCts = new CancellationTokenSource();
-                _readTask = Task.Run(() => ReadLoopAsync(portObj, _readCts.Token));
-
-                _streamEnabled = false;
-                _logger.LogInformation("Connected to {Port}. Running startup sequence: version probe → config refresh → stream enable.", port);
-                UpdateConnectionState();
-
-                // Startup order: 1) GET_VERSION probe first to confirm the binary
-                // link is alive, 2) pull configuration via PACED GET requests
-                // (retry the whole set if any reply is lost), 3) only at the very
-                // end enable the telemetry stream so firmware is idle during the
-                // queries and every reply is the direct answer to a request.
-                _ = RunStartupSequenceAsync();
                 return;
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("Failed to connect to {Port}: {Message}. Retrying in {Delay} ms...",
-                    port, ex.Message, _options.ReconnectDelayMs);
-                ClosePort();
-                SetState(DeviceConnectionState.Error, ex.Message);
+            _isConnectingLoopRunning = true;
+        }
 
-                try { Thread.Sleep(_options.ReconnectDelayMs); }
-                catch (ThreadInterruptedException) { return; }
+        try
+        {
+            while (!_disposed && !string.IsNullOrEmpty(_requestedPort))
+            {
+                string requested = _requestedPort;
+                string? port = null;
+                try
+                {
+                    SetState(DeviceConnectionState.Connecting, requested);
+
+                    if (string.Equals(requested, "AUTO", StringComparison.OrdinalIgnoreCase))
+                    {
+                        port = FindAutoPort();
+                        if (string.IsNullOrEmpty(port))
+                        {
+                            throw new IOException("No compatible DPLL USB Serial device detected.");
+                        }
+                    }
+                    else
+                    {
+                        port = requested;
+                        if (!SerialPort.GetPortNames().Contains(port, StringComparer.OrdinalIgnoreCase))
+                        {
+                            throw new IOException($"Port '{port}' is not available.");
+                        }
+                    }
+
+                    var portObj = new SerialPort(port, _options.BaudRate, Parity.None, 8, StopBits.One)
+                    {
+                        ReadTimeout = 1000,
+                        WriteTimeout = 1000,
+                        DtrEnable = true,
+                        RtsEnable = true
+                    };
+                    portObj.Open();
+
+                    lock (_writeLock)
+                    {
+                        _port = portObj;
+                    }
+                    _rxBuffer.Clear();
+
+                    _readCts = new CancellationTokenSource();
+                    _readTask = Task.Run(() => ReadLoopAsync(portObj, _readCts.Token));
+
+                    _streamEnabled = false;
+                    _logger.LogInformation("Connected to {Port}. Running startup sequence: version probe → config refresh → stream enable.", port);
+                    UpdateConnectionState();
+
+                    // Startup order: 1) GET_VERSION probe first to confirm the binary
+                    // link is alive, 2) pull configuration via PACED GET requests
+                    // (retry the whole set if any reply is lost), 3) only at the very
+                    // end enable the telemetry stream so firmware is idle during the
+                    // queries and every reply is the direct answer to a request.
+                    _ = RunStartupSequenceAsync();
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to connect to {Port}: {Message}. Retrying in {Delay} ms...",
+                        port ?? requested, ex.Message, _options.ReconnectDelayMs);
+                    ClosePort();
+                    SetState(DeviceConnectionState.Error, ex.Message);
+
+                    try { Thread.Sleep(_options.ReconnectDelayMs); }
+                    catch (ThreadInterruptedException) { return; }
+                }
             }
         }
+        finally
+        {
+            lock (_connectLock)
+            {
+                _isConnectingLoopRunning = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Auto-detects the STM32 DPLL USB CDC port.
+    /// Priority:
+    /// 1. Hardware ID: USB\VID_0483&PID_5740 (DPLL STM32 Virtual COM Port)
+    /// 2. If single available COM port on the system, use it.
+    /// </summary>
+    public static string? FindAutoPort()
+    {
+        var available = SerialPort.GetPortNames();
+        if (available.Length == 0) return null;
+
+        // On Windows, inspect registry for STM32 USB CDC (VID_0483&PID_5740)
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                using var dpllKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\USB\VID_0483&PID_5740");
+                if (dpllKey != null)
+                {
+                    var availableSet = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
+                    foreach (var subName in dpllKey.GetSubKeyNames())
+                    {
+                        using var paramKey = dpllKey.OpenSubKey(subName + @"\Device Parameters");
+                        var pName = paramKey?.GetValue("PortName") as string;
+                        if (!string.IsNullOrEmpty(pName) && availableSet.Contains(pName))
+                        {
+                            return pName;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Fall back to available ports
+            }
+        }
+
+        // If only 1 port exists on machine, connect to it
+        if (available.Length == 1)
+        {
+            return available[0];
+        }
+
+        // Return first port if none specifically matched
+        return available.FirstOrDefault();
     }
 
     private void ClosePort()

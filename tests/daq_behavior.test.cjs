@@ -239,3 +239,73 @@ test('zero lock threshold is rejected before sending a setter the firmware would
   assert.equal(f.logs.at(-1).level, 'error');
   assert.match(f.logs.at(-1).message, /LockThresholdNs/);
 });
+
+test('frequency calibration sweep steps through target range, records deviation, and produces results', async () => {
+  let virtualTime = 0;
+  const elements = new Map();
+  const calls = [];
+  const logs = [];
+  function element(id) {
+    if (!elements.has(id)) {
+      let value = '';
+      elements.set(id, {
+        get value() { return value; }, set value(v) { value = String(v); },
+        textContent: '', hidden: false, disabled: false, className: '', dataset: {}, style: {},
+        listeners: {}, classList: { toggle() {}, add() {}, remove() {} },
+        addEventListener(type, handler) { this.listeners[type] = handler; },
+        appendChild() {}, removeChild() {}, querySelector() { return { textContent: '' }; },
+      });
+    }
+    return elements.get(id);
+  }
+  const context = vm.createContext({
+    DpllConfig,
+    performance: { now: () => (virtualTime += 50) },
+    setInterval() {},
+    setTimeout: (fn) => fn(),
+    signalR: { HubConnectionState: { Connected: 'Connected' } },
+    document: {
+      getElementById: element,
+      createElement: () => element('row'),
+      body: { appendChild() {}, removeChild() {} }
+    },
+    recordLog: (level, message) => logs.push({ level, message }),
+    hubInvoke: async (method, patch) => {
+      calls.push({ method, patch });
+      return true;
+    },
+  });
+
+  vm.runInContext(appWithoutBoot, context);
+  vm.runInContext("log = recordLog; state.connected = true; connection = { state: 'Connected', invoke: (...args) => hubInvoke(...args) };", context);
+  const run = (code) => vm.runInContext(code, context);
+
+  // Set calibration inputs: 20000 to 22000 in 1000 Hz steps (3 steps: 20000, 21000, 22000)
+  element('calStartFreqInput').value = '20000';
+  element('calStopFreqInput').value = '22000';
+  element('calStepFreqInput').value = '1000';
+  element('calSettleTimeInput').value = '50';
+
+  // Simulate telemetry returning measured frequency with slight offset
+  run(`
+    state.telemetry = { ReferenceFrequencyHz: 20000.5, PhaseErrorNs: 0, DACVoltage_V: 1.65, LockStatus: 3 };
+  `);
+
+  await run('startCalibrationSweep()');
+
+  // Verify SetManualFrequency calls
+  const freqCalls = calls.filter(c => c.method === 'SetManualFrequency');
+  assert.equal(freqCalls.length, 3);
+  assert.equal(freqCalls[0].patch, 20000);
+  assert.equal(freqCalls[1].patch, 21000);
+  assert.equal(freqCalls[2].patch, 22000);
+
+  // Check state results
+  const results = run('calState.results');
+  assert.equal(results.length, 3);
+  assert.equal(results[0].target, 20000);
+  assert.equal(results[1].target, 21000);
+  assert.equal(results[2].target, 22000);
+  assert.equal(element('downloadCalCsvBtn').disabled, false);
+  assert.match(logs.at(-1).message, /Calibration completed successfully/);
+});

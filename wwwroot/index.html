@@ -283,6 +283,74 @@
       </div>
     </section>
 
+    <!-- ======================= Frequency Calibration & Sweep ======================= -->
+    <section class="panel cal-panel" id="calibrationPanel">
+      <div class="panel-head">
+        <h2>Frequency Calibration &amp; Sweep</h2>
+        <div class="cal-status-badge">
+          <span class="chip" id="calStatusChip">Idle</span>
+        </div>
+      </div>
+      <p class="cal-help">
+        Perform automated frequency sweeping across a specified range. At each step, the generator is commanded, allowed to settle, and the measured system frequency is captured to compute deviation and error. Results can be downloaded as a CSV file.
+      </p>
+
+      <div class="config-grid cal-grid">
+        <div class="field">
+          <label for="calStartFreqInput">Start Frequency <span class="unit">(Hz)</span></label>
+          <input id="calStartFreqInput" type="number" min="1000" max="500000" step="1" value="20000" />
+        </div>
+        <div class="field">
+          <label for="calStopFreqInput">Stop Frequency <span class="unit">(Hz)</span></label>
+          <input id="calStopFreqInput" type="number" min="1000" max="500000" step="1" value="40000" />
+        </div>
+        <div class="field">
+          <label for="calStepFreqInput">Step Size <span class="unit">(Hz)</span></label>
+          <input id="calStepFreqInput" type="number" min="1" max="50000" step="1" value="500" />
+        </div>
+        <div class="field">
+          <label for="calSettleTimeInput">Settle Time <span class="unit">(ms)</span></label>
+          <input id="calSettleTimeInput" type="number" min="50" max="10000" step="10" value="200" title="Stabilization wait time after setting frequency before measurement" />
+        </div>
+      </div>
+
+      <div class="cal-controls">
+        <button id="startCalBtn" class="btn btn-primary" disabled>▶ Start Calibration</button>
+        <button id="stopCalBtn" class="btn btn-danger" hidden>⏹ Stop Calibration</button>
+        <button id="downloadCalCsvBtn" class="btn btn-success" disabled>💾 Download CSV</button>
+        <button id="clearCalBtn" class="btn btn-ghost" disabled>Clear Results</button>
+      </div>
+
+      <div class="cal-progress-wrapper" id="calProgressWrapper" hidden>
+        <div class="cal-progress-header">
+          <span id="calProgressText">Step 0 of 0 (0%)</span>
+          <span id="calLiveStats" class="mono">Target: — | Measured: — | Dev: —</span>
+        </div>
+        <div class="cal-progress-bar">
+          <div class="cal-progress-fill" id="calProgressFill" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <div class="cal-table-container">
+        <table class="cal-table" id="calTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Target Freq (Hz)</th>
+              <th>Measured Freq (Hz)</th>
+              <th>Deviation (Hz)</th>
+              <th>Error (%)</th>
+              <th>Settle (ms)</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="calTableBody">
+            <tr class="cal-empty-row"><td colspan="7">No calibration data yet. Click "Start Calibration" to run sweep.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- ======================= Log ======================= -->
     <section class="panel log-panel">
       <div class="panel-head">

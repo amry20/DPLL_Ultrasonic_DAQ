@@ -128,6 +128,21 @@ const els = {
   manualDdsInput: $('manualDdsInput'),
   manualDdsValue: $('manualDdsValue'),
   manualDdsSetBtn: $('manualDdsSetBtn'),
+  calStartFreqInput: $('calStartFreqInput'),
+  calStopFreqInput: $('calStopFreqInput'),
+  calStepFreqInput: $('calStepFreqInput'),
+  calSettleTimeInput: $('calSettleTimeInput'),
+  startCalBtn: $('startCalBtn'),
+  stopCalBtn: $('stopCalBtn'),
+  downloadCalCsvBtn: $('downloadCalCsvBtn'),
+  clearCalBtn: $('clearCalBtn'),
+  calStatusChip: $('calStatusChip'),
+  calProgressWrapper: $('calProgressWrapper'),
+  calProgressText: $('calProgressText'),
+  calLiveStats: $('calLiveStats'),
+  calProgressFill: $('calProgressFill'),
+  calTable: $('calTable'),
+  calTableBody: $('calTableBody'),
   log: $('log'),
   clearLogBtn: $('clearLogBtn'),
 };
@@ -212,6 +227,10 @@ function onTelemetry(t) {
   updateStatus(t);
   updateCharts(t);
 
+  if (calState.running && typeof t.ReferenceFrequencyHz === 'number') {
+    calState.samples.push(t.ReferenceFrequencyHz);
+  }
+
   if (!state.paused && state.sampleCount % 25 === 0) {
     log('data', `freq=${fmt(t.ReferenceFrequencyHz, 2)} Hz · phase=${fmt(t.PhaseErrorNs, 1)} ns · dac=${fmt(t.DACVoltage_V, 3)} V · ${t.State}`);
   }
@@ -257,6 +276,12 @@ function onConfiguration(cfg) {
   if (els.ddsCenterInput) els.ddsCenterInput.value = cfg.DdsCenterFreq !== undefined ? cfg.DdsCenterFreq : 28000;
   if (els.ddsMinInput) els.ddsMinInput.value = cfg.DdsMinFreq !== undefined ? cfg.DdsMinFreq : 20000;
   if (els.ddsMaxInput) els.ddsMaxInput.value = cfg.DdsMaxFreq !== undefined ? cfg.DdsMaxFreq : 40000;
+  if (els.calStartFreqInput && cfg.DdsMinFreq !== undefined && !els.calStartFreqInput.dataset.userEdited) {
+    els.calStartFreqInput.value = cfg.DdsMinFreq;
+  }
+  if (els.calStopFreqInput && cfg.DdsMaxFreq !== undefined && !els.calStopFreqInput.dataset.userEdited) {
+    els.calStopFreqInput.value = cfg.DdsMaxFreq;
+  }
   if (els.manualDdsSlider && cfg.DdsMinFreq !== undefined && cfg.DdsMaxFreq !== undefined) {
     els.manualDdsSlider.min = cfg.DdsMinFreq;
     els.manualDdsSlider.max = cfg.DdsMaxFreq;
@@ -348,6 +373,10 @@ function setUiConnected(connected) {
   if (els.manualDdsInput) els.manualDdsInput.disabled = !connected;
   if (els.manualDdsSetBtn) els.manualDdsSetBtn.disabled = !connected;
   els.startLogBtn.disabled = !connected || state.logging;
+  if (els.startCalBtn) els.startCalBtn.disabled = !connected || calState.running;
+  if (!connected && calState.running) {
+    stopCalibrationSweep();
+  }
   if (!connected) {
     state.telemetry = null;
     state.config = null;
@@ -927,6 +956,313 @@ async function onStopLogging() {
 
 els.startLogBtn.addEventListener('click', onStartLogging);
 els.stopLogBtn.addEventListener('click', onStopLogging);
+
+// ---------------- Frequency Calibration & Sweep ----------------
+const calState = {
+  running: false,
+  aborting: false,
+  results: [],
+  samples: [],
+};
+
+function setCalBadge(status) {
+  if (!els.calStatusChip) return;
+  els.calStatusChip.className = 'chip';
+  switch (status) {
+    case 'running':
+      els.calStatusChip.classList.add('chip-primary');
+      els.calStatusChip.textContent = 'Sweeping…';
+      break;
+    case 'complete':
+      els.calStatusChip.classList.add('chip-success');
+      els.calStatusChip.textContent = 'Complete';
+      break;
+    case 'aborted':
+      els.calStatusChip.classList.add('chip-warn');
+      els.calStatusChip.textContent = 'Stopped';
+      break;
+    default:
+      els.calStatusChip.textContent = 'Idle';
+      break;
+  }
+}
+
+function clearCalibrationResults() {
+  if (calState.running) return;
+  calState.results = [];
+  calState.samples = [];
+  if (els.calTableBody) els.calTableBody.innerHTML = '';
+  if (els.calProgressWrapper) els.calProgressWrapper.hidden = true;
+  if (els.calProgressFill && els.calProgressFill.style) els.calProgressFill.style.width = '0%';
+  if (els.calProgressText) els.calProgressText.textContent = 'Step 0 of 0 (0%)';
+  if (els.calLiveStats) els.calLiveStats.textContent = 'Target: — | Measured: — | Dev: —';
+  if (els.downloadCalCsvBtn) els.downloadCalCsvBtn.disabled = true;
+  if (els.clearCalBtn) els.clearCalBtn.disabled = true;
+  setCalBadge('idle');
+  log('info', 'Calibration results cleared');
+}
+
+function renderCalTableRow(item) {
+  if (!els.calTableBody) return;
+  const tr = document.createElement('tr');
+
+  const devClass = Math.abs(item.deviation) <= 2 ? 'cal-dev-good'
+                 : Math.abs(item.deviation) <= 10 ? 'cal-dev-warn'
+                 : 'cal-dev-bad';
+
+  const sign = item.deviation > 0 ? '+' : '';
+  const errSign = item.errorPct > 0 ? '+' : '';
+
+  tr.innerHTML = `
+    <td>${item.step}</td>
+    <td class="mono">${fmt(item.target, 2)}</td>
+    <td class="mono">${fmt(item.measured, 2)}</td>
+    <td class="mono ${devClass}">${sign}${fmt(item.deviation, 2)}</td>
+    <td class="mono ${devClass}">${errSign}${fmt(item.errorPct, 4)}%</td>
+    <td class="mono">${item.settleTimeMs}</td>
+  `;
+
+  els.calTableBody.appendChild(tr);
+  if (els.calTableBody.parentElement) {
+    els.calTableBody.parentElement.scrollTop = els.calTableBody.parentElement.scrollHeight;
+  }
+}
+
+async function startCalibrationSweep() {
+  if (calState.running) return;
+  if (!state.connected) {
+    log('warn', 'Cannot start calibration: device not connected');
+    return;
+  }
+
+  const startFreq = parseFloat(els.calStartFreqInput ? els.calStartFreqInput.value : 0);
+  const stopFreq = parseFloat(els.calStopFreqInput ? els.calStopFreqInput.value : 0);
+  const stepSize = parseFloat(els.calStepFreqInput ? els.calStepFreqInput.value : 0);
+  const settleTime = parseInt(els.calSettleTimeInput ? els.calSettleTimeInput.value : 0, 10);
+
+  if (isNaN(startFreq) || startFreq <= 0) {
+    log('error', 'Calibration Error: Start frequency must be positive');
+    return;
+  }
+  if (isNaN(stopFreq) || stopFreq < startFreq) {
+    log('error', 'Calibration Error: Stop frequency must be >= Start frequency');
+    return;
+  }
+  if (isNaN(stepSize) || stepSize <= 0) {
+    log('error', 'Calibration Error: Step size must be positive');
+    return;
+  }
+  if (isNaN(settleTime) || settleTime < 50) {
+    log('error', 'Calibration Error: Settle time must be at least 50 ms');
+    return;
+  }
+
+  const points = [];
+  for (let f = startFreq; f <= stopFreq + 1e-4; f += stepSize) {
+    points.push(Math.round(f * 100) / 100);
+  }
+  if (points.length === 0) {
+    log('error', 'Calibration Error: No frequency steps calculated');
+    return;
+  }
+
+  calState.running = true;
+  calState.aborting = false;
+  calState.results = [];
+  calState.samples = [];
+
+  if (els.calTableBody) els.calTableBody.innerHTML = '';
+  if (els.calProgressWrapper) els.calProgressWrapper.hidden = false;
+  if (els.startCalBtn) els.startCalBtn.hidden = true;
+  if (els.stopCalBtn) {
+    els.stopCalBtn.hidden = false;
+    els.stopCalBtn.disabled = false;
+  }
+  if (els.downloadCalCsvBtn) els.downloadCalCsvBtn.disabled = true;
+  if (els.clearCalBtn) els.clearCalBtn.disabled = true;
+  if (els.calStartFreqInput) els.calStartFreqInput.disabled = true;
+  if (els.calStopFreqInput) els.calStopFreqInput.disabled = true;
+  if (els.calStepFreqInput) els.calStepFreqInput.disabled = true;
+  if (els.calSettleTimeInput) els.calSettleTimeInput.disabled = true;
+
+  setCalBadge('running');
+  log('info', `Starting frequency calibration: ${points.length} steps (${startFreq} Hz → ${stopFreq} Hz, step: ${stepSize} Hz, settle: ${settleTime} ms)`);
+
+  const total = points.length;
+
+  try {
+    for (let i = 0; i < total; i++) {
+      if (calState.aborting || !state.connected) {
+        log('warn', 'Calibration aborted by user or connection lost');
+        break;
+      }
+
+      const targetFreq = points[i];
+      const stepNum = i + 1;
+      const pct = Math.round((stepNum / total) * 100);
+
+      if (els.calProgressText) {
+        els.calProgressText.textContent = `Step ${stepNum} of ${total} (${pct}%)`;
+      }
+      if (els.calProgressFill && els.calProgressFill.style) {
+        els.calProgressFill.style.width = `${pct}%`;
+      }
+
+      calState.samples = [];
+
+      try {
+        await call('SetManualFrequency', targetFreq);
+      } catch (err) {
+        log('error', `Failed to set manual frequency ${targetFreq} Hz: ${err.message}`);
+        break;
+      }
+
+      const startTime = performance.now();
+      while (performance.now() - startTime < settleTime) {
+        if (calState.aborting) break;
+        await new Promise(r => setTimeout(r, 20));
+      }
+
+      if (calState.aborting) {
+        log('warn', 'Calibration aborted during stabilization');
+        break;
+      }
+
+      let measuredFreq = 0;
+      if (calState.samples.length > 0) {
+        const slice = calState.samples.slice(-5);
+        const sum = slice.reduce((a, b) => a + b, 0);
+        measuredFreq = sum / slice.length;
+      } else if (state.telemetry && typeof state.telemetry.ReferenceFrequencyHz === 'number') {
+        measuredFreq = state.telemetry.ReferenceFrequencyHz;
+      }
+
+      const deviation = measuredFreq - targetFreq;
+      const errorPct = targetFreq !== 0 ? (deviation / targetFreq) * 100 : 0;
+
+      const item = {
+        step: stepNum,
+        target: targetFreq,
+        measured: measuredFreq,
+        deviation: deviation,
+        errorPct: errorPct,
+        settleTimeMs: settleTime,
+        timestamp: new Date().toISOString()
+      };
+
+      calState.results.push(item);
+      renderCalTableRow(item);
+
+      if (els.calLiveStats) {
+        const sign = deviation > 0 ? '+' : '';
+        const errSign = errorPct > 0 ? '+' : '';
+        els.calLiveStats.textContent = `Target: ${fmt(targetFreq, 2)} Hz | Measured: ${fmt(measuredFreq, 2)} Hz | Dev: ${sign}${fmt(deviation, 2)} Hz (${errSign}${fmt(errorPct, 4)}%)`;
+      }
+    }
+  } catch (err) {
+    log('error', `Calibration sweep encountered error: ${err.message}`);
+  } finally {
+    const wasAborted = calState.aborting || calState.results.length < total;
+    calState.running = false;
+    calState.aborting = false;
+
+    if (els.startCalBtn) {
+      els.startCalBtn.hidden = false;
+      els.startCalBtn.disabled = !state.connected;
+    }
+    if (els.stopCalBtn) {
+      els.stopCalBtn.hidden = true;
+    }
+    if (els.downloadCalCsvBtn) {
+      els.downloadCalCsvBtn.disabled = calState.results.length === 0;
+    }
+    if (els.clearCalBtn) {
+      els.clearCalBtn.disabled = calState.results.length === 0;
+    }
+    if (els.calStartFreqInput) els.calStartFreqInput.disabled = false;
+    if (els.calStopFreqInput) els.calStopFreqInput.disabled = false;
+    if (els.calStepFreqInput) els.calStepFreqInput.disabled = false;
+    if (els.calSettleTimeInput) els.calSettleTimeInput.disabled = false;
+
+    setCalBadge(wasAborted ? 'aborted' : 'complete');
+    if (!wasAborted) {
+      log('ok', `Calibration completed successfully (${calState.results.length} points). You can now download the CSV report.`);
+    }
+  }
+}
+
+function stopCalibrationSweep() {
+  if (!calState.running) return;
+  calState.aborting = true;
+  if (els.stopCalBtn) els.stopCalBtn.disabled = true;
+  log('info', 'Stopping calibration sweep…');
+}
+
+function getGeneratorSourceName() {
+  if (!els.generatorSourceInput) return 'Unknown';
+  switch (parseInt(els.generatorSourceInput.value, 10)) {
+    case 0: return 'CD4046 / DAC VCO (Source 0)';
+    case 1: return 'AD9833 DDS (Source 1)';
+    case 2: return 'STM32 TIM1 PWM Dither (Source 2)';
+    default: return `Source ${els.generatorSourceInput.value}`;
+  }
+}
+
+function onDownloadCalibrationCsv() {
+  if (calState.results.length === 0) {
+    log('warn', 'No calibration results to export');
+    return;
+  }
+  const now = new Date();
+  const timestampStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = `frequency_calibration_${timestampStr}.csv`;
+
+  const lines = [
+    `# DPLL Ultrasonic Frequency Calibration Report`,
+    `# Export Date: ${now.toISOString()}`,
+    `# Generator Source: ${getGeneratorSourceName()}`,
+    `# Target Range: ${els.calStartFreqInput ? els.calStartFreqInput.value : ''} Hz - ${els.calStopFreqInput ? els.calStopFreqInput.value : ''} Hz (Step: ${els.calStepFreqInput ? els.calStepFreqInput.value : ''} Hz)`,
+    `# Settle Time: ${els.calSettleTimeInput ? els.calSettleTimeInput.value : ''} ms`,
+    `# Total Steps: ${calState.results.length}`,
+    `Step,Target_Frequency_Hz,Measured_Frequency_Hz,Deviation_Hz,Error_Percent,Settle_Time_ms,Timestamp`
+  ];
+
+  for (const r of calState.results) {
+    lines.push([
+      r.step,
+      r.target.toFixed(2),
+      r.measured.toFixed(2),
+      r.deviation.toFixed(2),
+      r.errorPct.toFixed(4),
+      r.settleTimeMs,
+      `"${r.timestamp}"`
+    ].join(','));
+  }
+
+  const csvContent = lines.join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  log('ok', `Calibration CSV exported: ${filename}`);
+}
+
+if (els.startCalBtn) els.startCalBtn.addEventListener('click', startCalibrationSweep);
+if (els.stopCalBtn) els.stopCalBtn.addEventListener('click', stopCalibrationSweep);
+if (els.downloadCalCsvBtn) els.downloadCalCsvBtn.addEventListener('click', onDownloadCalibrationCsv);
+if (els.clearCalBtn) els.clearCalBtn.addEventListener('click', clearCalibrationResults);
+
+['calStartFreqInput', 'calStopFreqInput', 'calStepFreqInput', 'calSettleTimeInput'].forEach(id => {
+  if (els[id]) {
+    els[id].addEventListener('input', () => { els[id].dataset.userEdited = 'true'; });
+  }
+});
 
 // ---------------- Boot ----------------
 updateConfigControls();

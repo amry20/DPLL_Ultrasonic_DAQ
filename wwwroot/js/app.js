@@ -10,6 +10,8 @@ const state = {
   port: null,
   telemetry: null,
   config: null,
+  configFormBaseline: null,
+  configBusy: false,
   paused: false,
   streamFresh: false,
   lastStreamAt: 0,
@@ -65,6 +67,11 @@ const els = {
   logChip: $('logChip'),
   startLogBtn: $('startLogBtn'),
   stopLogBtn: $('stopLogBtn'),
+  armRawBtn: $('armRawBtn'),
+  checkRawBtn: $('checkRawBtn'),
+  downloadRawBtn: $('downloadRawBtn'),
+  rawConditionInput: $('rawConditionInput'),
+  rawCaptureStatus: $('rawCaptureStatus'),
   refreshCfgBtn: $('refreshCfgBtn'),
   applyCfgBtn: $('applyCfgBtn'),
   saveCfgBtn: $('saveCfgBtn'),
@@ -81,7 +88,19 @@ const els = {
   ddsMinField: $('ddsMinField'),
   ddsMaxField: $('ddsMaxField'),
   kpUnit: $('kpUnit'),
+  kiUnit: $('kiUnit'),
+  kdUnit: $('kdUnit'),
+  firmwareVersion: $('firmwareVersion'),
+  configReadbackStatus: $('configReadbackStatus'),
+  sourceChangeHint: $('sourceChangeHint'),
+  trackingDirectionInput: $('trackingDirectionInput'),
+  trackingDirectionStatus: $('trackingDirectionStatus'),
+  referenceCaptureEdgeInput: $('referenceCaptureEdgeInput'),
+  zcdCaptureEdgeInput: $('zcdCaptureEdgeInput'),
   jumperModal: $('jumperModal'),
+  modalTitleText: $('modalTitleText'),
+  modalSourceText: $('modalSourceText'),
+  modalReqText: $('modalReqText'),
   modalCancelBtn: $('modalCancelBtn'),
   modalConfirmBtn: $('modalConfirmBtn'),
   kpInput: $('kpInput'),
@@ -97,9 +116,6 @@ const els = {
   timeoutInput: $('timeoutInput'),
   streamInput: $('streamInput'),
   lossInput: $('lossInput'),
-  refEdgeInput: $('refEdgeInput'),
-  zcdEdgeInput: $('zcdEdgeInput'),
-  trackingDirInput: $('trackingDirInput'),
   resetLoopBtn: $('resetLoopBtn'),
   runLoopBtn: $('runLoopBtn'),
   shutdownBtn: $('shutdownBtn'),
@@ -111,12 +127,10 @@ const els = {
   manualDacInput: $('manualDacInput'),
   manualDacValue: $('manualDacValue'),
   manualSetBtn: $('manualSetBtn'),
-  resumeLoopDacBtn: $('resumeLoopDacBtn'),
   manualDdsSlider: $('manualDdsSlider'),
   manualDdsInput: $('manualDdsInput'),
   manualDdsValue: $('manualDdsValue'),
   manualDdsSetBtn: $('manualDdsSetBtn'),
-  resumeLoopDdsBtn: $('resumeLoopDdsBtn'),
   log: $('log'),
   clearLogBtn: $('clearLogBtn'),
 };
@@ -226,9 +240,16 @@ function updateMcoClockHint(val) {
 
 function onConfiguration(cfg) {
   state.config = cfg;
+  els.firmwareVersion.textContent = cfg.FirmwareVersion || 'Unknown — GET_VERSION unanswered';
+  els.configReadbackStatus.textContent = cfg.ReadbackComplete
+    ? 'Configuration read back. Apply sends edited fields only.'
+    : 'Readback incomplete or in progress. Apply is disabled until all required settings arrive.';
+  if (!cfg.ReadbackComplete) {
+    updateConfigControls();
+    return;
+  }
   if (els.generatorSourceInput) {
     els.generatorSourceInput.value = cfg.GeneratorSource !== undefined ? cfg.GeneratorSource : 0;
-    _currentGeneratorSource = String(cfg.GeneratorSource ?? 0);
   }
   if (els.ddsMcoClockInput && cfg.DdsMcoClock !== undefined) {
     els.ddsMcoClockInput.value = String(cfg.DdsMcoClock);
@@ -248,7 +269,7 @@ function onConfiguration(cfg) {
       if (els.manualDdsValue) els.manualDdsValue.textContent = `${parseFloat(cfg.DdsCenterFreq).toFixed(2)} Hz`;
     }
   }
-  updateGeneratorSourceUI(cfg.GeneratorSource ?? 0);
+  updateGeneratorSourceUI(cfg.GeneratorSource ?? 2);
 
   els.kpInput.value = fmt(cfg.Kp, 7);
   els.kiInput.value = fmt(cfg.Ki, 7);
@@ -262,26 +283,22 @@ function onConfiguration(cfg) {
   els.timeoutInput.value = cfg.LockMemoryTimeoutMs;
   els.streamInput.value = cfg.StreamPeriodMs;
   els.lossInput.value = cfg.SignalLossBehavior;
-  if (els.refEdgeInput && cfg.CaptureRefEdge !== undefined) {
-    els.refEdgeInput.value = String(cfg.CaptureRefEdge);
-  }
-  if (els.zcdEdgeInput && cfg.CaptureZcdEdge !== undefined) {
-    els.zcdEdgeInput.value = String(cfg.CaptureZcdEdge);
-  }
-  if (els.trackingDirInput && cfg.TrackingDirection !== undefined) {
-    els.trackingDirInput.value = String(cfg.TrackingDirection);
-  }
-  els.applyCfgBtn.disabled = !state.connected;
+  els.referenceCaptureEdgeInput.value = cfg.ReferenceCaptureEdge == null ? '' : String(cfg.ReferenceCaptureEdge);
+  els.zcdCaptureEdgeInput.value = cfg.ZcdCaptureEdge == null ? '' : String(cfg.ZcdCaptureEdge);
+  els.trackingDirectionInput.value = cfg.TrackingDirection == null ? '' : String(cfg.TrackingDirection);
+  els.trackingDirectionStatus.textContent = cfg.TrackingDirection == null
+    ? 'Active direction: unknown / unsupported GET'
+    : `Active direction: ${cfg.TrackingDirection === 1 ? 'Inverted' : 'Normal'}`;
+  state.configFormBaseline = DpllConfig.snapshot(els);
+  updateConfigControls();
   els.loopValue.textContent = cfg.LoopPeriodMs;
 
-  els.manualFlag.hidden = !cfg.ManualMode;
-  const srcName = cfg.GeneratorSource === 1 ? 'DDS (AD9833)' : 'DAC (CD4046 VCO)';
+  els.manualFlag.hidden = state.telemetry ? state.telemetry.LockStatus !== 4 : !cfg.ManualMode;
+  const srcNames = { 0: 'DAC (CD4046 VCO)', 1: 'DDS (AD9833)', 2: 'PWM Dither (TIM1 PA8)' };
+  const srcName = srcNames[cfg.GeneratorSource] || 'DAC (CD4046 VCO)';
   const clkName = cfg.DdsMcoClockName || 'HSE 8 MHz (/1)';
   const resHz = (cfg.DdsResolutionHz || 0.029802).toFixed(6);
-  const refEdge = cfg.CaptureRefEdgeName || 'Rising';
-  const zcdEdge = cfg.CaptureZcdEdgeName || 'Rising';
-  const trackDir = cfg.TrackingDirectionName || 'Normal (Series fs)';
-  log('ok', `Config loaded: Source=${srcName} · MCO Clock=${clkName} (Res: ${resHz} Hz) · Edges: REF=${refEdge}, ZCD=${zcdEdge} · Direction=${trackDir} · Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · loss=${cfg.SignalLossName}`);
+  log('ok', `Config loaded: Source=${srcName} · MCO Clock=${clkName} (Res: ${resHz} Hz) · Kp=${cfg.Kp} Ki=${cfg.Ki} Kd=${cfg.Kd} · center=${cfg.CenterVoltage} V · loop=${cfg.LoopPeriodMs} ms · loss=${cfg.SignalLossName}`);
 }
 
 const LOCK_STATES = {
@@ -289,7 +306,7 @@ const LOCK_STATES = {
   1: { text: 'WAIT ZCD', cls: 'error' },
   2: { text: 'TRACK', cls: 'track' },
   3: { text: 'LOCK', cls: 'lock' },
-  4: { text: 'MANUAL TEST', cls: 'warn' },
+  4: { text: 'MANUAL', cls: 'manual' },
 };
 
 function onConnectionState(code, port) {
@@ -320,21 +337,29 @@ function onConnectionState(code, port) {
 }
 
 function setUiConnected(connected) {
-  els.applyCfgBtn.disabled = !connected || !state.config;
+  state.connected = connected;
+  updateConfigControls();
   els.saveCfgBtn.disabled = !connected;
   els.loadCfgBtn.disabled = !connected;
   if (els.resetEepromBtn) els.resetEepromBtn.disabled = !connected;
   if (els.manualDacSlider) els.manualDacSlider.disabled = !connected;
   if (els.manualDacInput) els.manualDacInput.disabled = !connected;
   if (els.manualSetBtn) els.manualSetBtn.disabled = !connected;
-  if (els.resumeLoopDacBtn) els.resumeLoopDacBtn.disabled = !connected;
   if (els.manualDdsSlider) els.manualDdsSlider.disabled = !connected;
   if (els.manualDdsInput) els.manualDdsInput.disabled = !connected;
   if (els.manualDdsSetBtn) els.manualDdsSetBtn.disabled = !connected;
-  if (els.resumeLoopDdsBtn) els.resumeLoopDdsBtn.disabled = !connected;
   els.startLogBtn.disabled = !connected || state.logging;
+  els.armRawBtn.disabled = !connected;
+  els.checkRawBtn.disabled = !connected;
+  els.downloadRawBtn.disabled = !connected;
+  if (!connected) els.rawCaptureStatus.textContent = 'Disconnected: diagnostic capture unavailable.';
   if (!connected) {
     state.telemetry = null;
+    state.config = null;
+    state.configFormBaseline = null;
+    updateConfigControls();
+    els.firmwareVersion.textContent = 'Unknown — device disconnected';
+    els.configReadbackStatus.textContent = 'Connect and read configuration before applying settings.';
     els.freqValue.textContent = '—';
     els.phaseValue.textContent = '—';
     els.dacValue.textContent = '—';
@@ -358,6 +383,7 @@ function updateStatus(t) {
   const s = LOCK_STATES[t.LockStatus] || { text: 'UNKNOWN', cls: 'error' };
   setLockBadge(s.cls, s.text);
   els.staleFlag.hidden = t.PhaseStale !== 1;
+  els.manualFlag.hidden = t.LockStatus !== 4;
 
   if (t.EepromStatus === 1) {
     setEepromBadge('ok', 'EEPROM OK');
@@ -365,26 +391,32 @@ function updateStatus(t) {
     setEepromBadge('danger', 'EEPROM ERR');
   }
 
-  const isDdsActive = (t.DdsStatus & 0x80) !== 0;
-  const isInverted = (t.DdsStatus & 0x40) !== 0; // tracking direction INVERTED
-  const ddsHwStatus = t.DdsStatus & 0x3F;
-  const dirTag = isInverted ? ' · DIR INV' : ' · DIR NORM';
+  const dds = DpllConfig.decodeDdsStatus(t.DdsStatus);
+  const isDdsActive = dds.active;
+  const ddsHwStatus = dds.hardware;
+  // A zero flag on old firmware cannot establish support for direction readback.
+  const directionKnown = dds.inverted || state.config?.TrackingDirection != null;
+  els.trackingDirectionStatus.textContent = directionKnown
+    ? `Active direction: ${dds.inverted ? 'Inverted' : 'Normal'} (telemetry)`
+    : 'Active direction: unknown / unsupported GET';
 
-  if (isDdsActive) {
+  if (state.config?.GeneratorSource === 2) {
+    setDdsBadge('ok', 'PWM DITHER (PA8)');
+  } else if (isDdsActive) {
     if (ddsHwStatus === 2) {
-      setDdsBadge('ok', 'DDS ACTIVE · SIG OK' + dirTag);
+      setDdsBadge('ok', 'DDS ACTIVE · SIG OK');
     } else if (ddsHwStatus === 1) {
-      setDdsBadge('ok', 'DDS ACTIVE' + dirTag);
+      setDdsBadge('ok', 'DDS ACTIVE');
     } else {
-      setDdsBadge('danger', 'DDS ERR' + dirTag);
+      setDdsBadge('danger', 'DDS ERR');
     }
   } else {
     if (ddsHwStatus === 2) {
-      setDdsBadge('ok', 'AD9833 READY (SIG)' + dirTag);
+      setDdsBadge('ok', 'AD9833 READY (SIG)');
     } else if (ddsHwStatus === 1) {
-      setDdsBadge('ok', 'AD9833 READY' + dirTag);
+      setDdsBadge('ok', 'AD9833 READY');
     } else {
-      setDdsBadge('danger', 'AD9833 ERR' + dirTag);
+      setDdsBadge('danger', 'AD9833 ERR');
     }
   }
 }
@@ -544,70 +576,48 @@ setInterval(() => {
 }, 500);
 
 // ---------------- Controls ----------------
-function onApplyConfig() {
-  if (!state.connected) { log('warn', 'Not connected'); return; }
-  const patch = {};
-  const num = (el) => (el.value === '' || el.value === null ? null : parseFloat(el.value));
-
-  const kp = num(els.kpInput);
-  const ki = num(els.kiInput);
-  const kd = num(els.kdInput);
-  const center = num(els.centerInput);
-  const target = num(els.targetInput);
-  const slew = num(els.slewInput);
-  const loop = num(els.loopInput);
-  const thr = num(els.thrInput);
-  const hold = num(els.holdInput);
-  const timeout = num(els.timeoutInput);
-  const stream = num(els.streamInput);
-  const loss = parseInt(els.lossInput.value, 10);
-
-  if (kp !== null && kp >= 0) patch.Kp = kp;
-  if (ki !== null && ki >= 0) patch.Ki = ki;
-  if (kd !== null && kd >= 0) patch.Kd = kd;
-  if (center !== null && center >= 0 && center <= 3.3) patch.CenterVoltage = center;
-  if (target !== null) patch.TargetPhase = target;
-  if (slew !== null && slew > 0) patch.MaxSlew = slew;
-  if (loop !== null && loop >= 1 && loop <= 1000) patch.LoopPeriodMs = loop;
-  if (thr !== null && thr >= 0) patch.LockThresholdNs = thr;
-  if (hold !== null && hold >= 1) patch.LockHoldCycles = hold;
-  if (timeout !== null && timeout >= 0) patch.LockMemoryTimeoutMs = timeout;
-  if (stream !== null && stream >= 1 && stream <= 65535) patch.StreamPeriodMs = stream;
-  patch.SignalLossBehavior = loss;
-
-  if (els.refEdgeInput) {
-    patch.CaptureRefEdge = parseInt(els.refEdgeInput.value, 10);
-  }
-  if (els.zcdEdgeInput) {
-    patch.CaptureZcdEdge = parseInt(els.zcdEdgeInput.value, 10);
-  }
-  if (els.trackingDirInput) {
-    patch.TrackingDirection = parseInt(els.trackingDirInput.value, 10);
-  }
-
-  if (els.generatorSourceInput) {
-    patch.GeneratorSource = parseInt(els.generatorSourceInput.value, 10);
-  }
-  if (els.ddsMcoClockInput) {
-    const clk = parseInt(els.ddsMcoClockInput.value, 10);
-    if (!isNaN(clk) && clk >= 0 && clk <= 6) {
-      patch.DdsMcoClock = clk;
-    }
-  }
-  const ddsCenter = num(els.ddsCenterInput);
-  if (ddsCenter !== null && ddsCenter >= 1000 && ddsCenter <= 500000) patch.DdsCenterFreq = ddsCenter;
-  const ddsMin = num(els.ddsMinInput);
-  if (ddsMin !== null && ddsMin >= 1000 && ddsMin <= 500000) patch.DdsMinFreq = ddsMin;
-  const ddsMax = num(els.ddsMaxInput);
-  if (ddsMax !== null && ddsMax >= 1000 && ddsMax <= 500000) patch.DdsMaxFreq = ddsMax;
-
-  if (Object.keys(patch).length === 0) {
-    log('warn', 'No valid values to apply');
+async function onApplyConfig() {
+  if (!state.connected || state.configBusy) { log('warn', 'Not connected or configuration busy'); return; }
+  let patch;
+  try {
+    patch = DpllConfig.buildPatch(DpllConfig.snapshot(els), state.configFormBaseline, state.config);
+  } catch (err) {
+    log('error', err.message);
     return;
   }
+  if (Object.keys(patch).length === 0) {
+    log('info', 'No configuration changes to apply');
+    return;
+  }
+  state.configBusy = true;
+  updateConfigControls();
+  try {
+    const confirmed = await call('ApplyConfiguration', patch);
+    if (confirmed === true) {
+      log('ok', Object.hasOwn(patch, 'GeneratorSource')
+        ? 'Source changed and active gain bank read back. Edit gains in the displayed units, then Apply.'
+        : 'Edited settings confirmed by firmware readback (RAM; not saved to EEPROM)');
+    } else {
+      log('warn', 'Apply was not confirmed. Read configuration before retrying.');
+    }
+  } finally {
+    state.configBusy = false;
+    updateConfigControls();
+  }
+}
 
-  call('ApplyConfiguration', patch);
-  log('info', 'Configuration applied to RAM (not saved to EEPROM)');
+function updateConfigControls() {
+  const ready = state.connected && state.config?.ReadbackComplete === true && !state.configBusy;
+  const sourcePending = ready && Number(els.generatorSourceInput.value) !== state.config.GeneratorSource;
+  for (const [key, id, , , , optional] of DpllConfig.fields) {
+    const field = els[id];
+    if (field) field.disabled = !ready || (sourcePending && key !== 'GeneratorSource') ||
+      (Boolean(optional) && state.config?.[key] == null);
+  }
+  els.applyCfgBtn.disabled = !ready;
+  els.sourceChangeHint.textContent = sourcePending
+    ? 'Source change pending: Apply switches source only, then reads its gain bank. Other unsaved edits will be replaced by that readback.'
+    : 'Kp, Ki, Kd and slew belong to the active source. Change source and Apply before editing its gains.';
 }
 
 function onSaveConfig() {
@@ -658,17 +668,17 @@ function onEepromActionResult(action, success) {
 
 function onResetLoop() {
   call('ResetLoop');
-  log('warn', 'Loop reset (center voltage, integrator cleared)');
+  log('warn', 'Loop reset requested — restart from the configured center');
 }
 
 function onRunLoop() {
   call('RunLoop');
-  log('ok', 'Control loop re-enabled (auto mode)');
+  log('info', 'Automatic control requested — watch the firmware state indicator');
 }
 
 function onShutdown() {
   call('ShutdownLoop');
-  log('error', 'Loop shutdown — DAC forced to 0 V');
+  log('warn', 'Shutdown requested — monitor MANUAL state; Run or Reset resumes control');
 }
 
 function onManualSet() {
@@ -743,21 +753,24 @@ function log(level, msg) {
 }
 
 // ---------------- Generator Source & Jumper Modal UI ----------------
-let _currentGeneratorSource = '0';
 
 function updateGeneratorSourceUI(source) {
+  const isFreq = source === 1 || source === '1' || source === 2 || source === '2';
   const isDds = source === 1 || source === '1';
+  const isPwm = source === 2 || source === '2';
   if (els.ddsMcoClockField) els.ddsMcoClockField.classList.toggle('field-highlight', isDds);
-  if (els.ddsCenterField) els.ddsCenterField.classList.toggle('field-highlight', isDds);
-  if (els.ddsMinField) els.ddsMinField.classList.toggle('field-highlight', isDds);
-  if (els.ddsMaxField) els.ddsMaxField.classList.toggle('field-highlight', isDds);
-  if (els.kpUnit) els.kpUnit.textContent = isDds ? '(Hz/ns)' : '(V/ns)';
-  if (els.slewUnit) els.slewUnit.textContent = isDds ? '(Hz/s)' : '(V/s)';
+  if (els.ddsCenterField) els.ddsCenterField.classList.toggle('field-highlight', isFreq);
+  if (els.ddsMinField) els.ddsMinField.classList.toggle('field-highlight', isFreq);
+  if (els.ddsMaxField) els.ddsMaxField.classList.toggle('field-highlight', isFreq);
+  if (els.kpUnit) els.kpUnit.textContent = isFreq ? '(Hz/ns)' : '(V/ns)';
+  if (els.kiUnit) els.kiUnit.textContent = isFreq ? '(Hz/(ns·s))' : '(V/(ns·s))';
+  if (els.kdUnit) els.kdUnit.textContent = isFreq ? '(Hz·s/ns)' : '(V·s/ns)';
+  if (els.slewUnit) els.slewUnit.textContent = isFreq ? '(Hz/s)' : '(V/s)';
   if (els.slewInput) {
-    els.slewInput.step = isDds ? '100' : '0.1';
-    els.slewInput.placeholder = isDds ? '20000' : '30';
+    els.slewInput.step = isFreq ? '100' : '0.1';
+    els.slewInput.placeholder = isFreq ? '20000' : '30';
   }
-  selectManualTab(isDds ? 'dds' : 'dac');
+  selectManualTab(isFreq ? 'dds' : 'dac');
 }
 
 if (els.ddsMcoClockInput) {
@@ -768,32 +781,38 @@ if (els.ddsMcoClockInput) {
 
 if (els.generatorSourceInput) {
   els.generatorSourceInput.addEventListener('change', () => {
-    const selected = els.generatorSourceInput.value;
-    if (selected === '1' && _currentGeneratorSource === '0') {
-      if (els.jumperModal) els.jumperModal.hidden = false;
-    } else {
-      _currentGeneratorSource = selected;
-      updateGeneratorSourceUI(parseInt(selected, 10));
+    const selected = Number(els.generatorSourceInput.value);
+    const prevSource = state.config?.GeneratorSource ?? 0;
+    if (selected === 1 && prevSource !== 1 && els.jumperModal) {
+      if (els.modalSourceText) els.modalSourceText.textContent = 'DDS (AD9833)';
+      if (els.modalReqText) els.modalReqText.innerHTML = 'Ensure the physical resistor jumper on the PCB is routed to the <strong>AD9833 DDS output</strong>, NOT to the CD4046 VCO!';
+      els.jumperModal.hidden = false;
+    } else if (selected === 2 && prevSource !== 2 && els.jumperModal) {
+      if (els.modalSourceText) els.modalSourceText.textContent = 'PWM Dither (STM32 TIM1 PA8)';
+      if (els.modalReqText) els.modalReqText.innerHTML = 'Ensure <strong>PA8</strong> is connected to Gate Driver input AND loopback wire <strong>PA8 is connected to PA0</strong> (TIM2_CH1 REF input)!';
+      els.jumperModal.hidden = false;
     }
+    // Keep the displayed gain units tied to the last confirmed active source.
+    updateConfigControls();
   });
 }
 
 if (els.modalCancelBtn) {
   els.modalCancelBtn.addEventListener('click', () => {
     if (els.jumperModal) els.jumperModal.hidden = true;
-    if (els.generatorSourceInput) els.generatorSourceInput.value = '0';
-    _currentGeneratorSource = '0';
-    updateGeneratorSourceUI(0);
-    log('info', 'Generator Source kept at DAC (CD4046 VCO)');
+    els.generatorSourceInput.value = String(state.config?.GeneratorSource ?? 2);
+    updateConfigControls();
+    log('info', 'Generator source change cancelled');
   });
 }
 
 if (els.modalConfirmBtn) {
   els.modalConfirmBtn.addEventListener('click', () => {
     if (els.jumperModal) els.jumperModal.hidden = true;
-    _currentGeneratorSource = '1';
-    updateGeneratorSourceUI(1);
-    log('warn', 'Switched Generator Source to DDS (AD9833). Ensure resistor jumper is set to DDS!');
+    updateConfigControls();
+    const sel = Number(els.generatorSourceInput.value);
+    const name = sel === 2 ? 'PWM Dither (TIM1 PA8)' : 'DDS (AD9833)';
+    log('warn', `${name} selected. Check hardware wiring/jumpers, then Apply to switch source and read its gains.`);
   });
 }
 
@@ -822,8 +841,6 @@ if (els.tabManualDac) els.tabManualDac.addEventListener('click', () => selectMan
 if (els.tabManualDds) els.tabManualDds.addEventListener('click', () => selectManualTab('dds'));
 
 if (els.manualDdsSetBtn) els.manualDdsSetBtn.addEventListener('click', onManualDdsSet);
-if (els.resumeLoopDacBtn) els.resumeLoopDacBtn.addEventListener('click', onRunLoop);
-if (els.resumeLoopDdsBtn) els.resumeLoopDdsBtn.addEventListener('click', onRunLoop);
 if (els.manualDdsSlider) els.manualDdsSlider.addEventListener('input', onManualDdsSlider);
 if (els.manualDdsInput) {
   els.manualDdsInput.addEventListener('input', onManualDdsInput);
@@ -838,6 +855,76 @@ els.pauseBtn.addEventListener('click', () => {
 });
 els.clearBtn.addEventListener('click', clearCharts);
 els.clearLogBtn.addEventListener('click', () => { els.log.innerHTML = ''; });
+
+// ---------------- Raw REF/ZCD diagnostic capture ----------------
+// Only ONE control window is stored in STM32 RAM at a time. No client-side
+// estimate is substituted for the true paired hardware timestamp records.
+function rawInfoSummary(info) {
+  if (!info) return 'No response from the firmware.';
+  if (info.State === 0) return 'Idle - click Arm next window.';
+  if (info.State === 1) return 'Armed - waiting for the next processed tracking window.';
+  if (info.State === 2) {
+    const pid = info.PidApplied ? 'PID applied' : 'FILTER HOLD (PID not applied)';
+    return `Window ${info.WindowId}: ${info.SampleCount} paired samples, ${info.AcceptedCount} accepted, ${pid}; loop ${info.LoopPeriodMs} ms, phase ${Number(info.FilteredPhaseNs).toFixed(1)} ns, state ${info.LockStatus}; overflow=${info.Overflow}`;
+  }
+  return 'Unknown firmware response.';
+}
+
+async function onArmRawWindow() {
+  if (!state.connected) return;
+  els.armRawBtn.disabled = true;
+  els.downloadRawBtn.disabled = true;
+  els.rawCaptureStatus.textContent = 'Arming next processed tracking window...';
+  try {
+    const ok = await call('ArmRawWindow');
+    els.rawCaptureStatus.textContent = ok ?
+      'Armed. Run a sonication pulse, then click Check capture (after the pulse).' :
+      'No ACK from firmware. Check the firmware version and connection.';
+    if (ok) log('ok', 'Raw capture armed for one window');
+  } finally {
+    els.armRawBtn.disabled = !state.connected;
+  }
+}
+
+async function onCheckRawWindow() {
+  if (!state.connected) return;
+  const info = await call('GetRawWindowInfo');
+  els.rawCaptureStatus.textContent = rawInfoSummary(info);
+  els.downloadRawBtn.disabled = !state.connected || !info || info.State !== 2;
+}
+
+async function onDownloadRawWindow() {
+  if (!state.connected) return;
+  els.downloadRawBtn.disabled = true;
+  els.rawCaptureStatus.textContent = 'Fetching raw data pages from firmware. Best done after pulse...';
+  const condition = els.rawConditionInput.value || 'Unknown';
+  try {
+    const csv = await call('ExportRawWindowCsv', condition);
+    if (!csv || !csv.startsWith('Condition,WindowId,')) {
+      els.rawCaptureStatus.textContent = 'Export failed: no valid captured window.';
+      return;
+    }
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    const safe = condition.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 60);
+    anchor.href = url;
+    anchor.download = `DPLL_raw_ZCD_${safe}_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    const samples = csv.trimEnd().split('\n').length - 1;
+    els.rawCaptureStatus.textContent = `Raw CSV downloaded: ${samples} samples from one control window.`;
+    log('ok', `Raw ZCD CSV exported (${samples} samples)`);
+  } finally {
+    els.downloadRawBtn.disabled = !state.connected;
+  }
+}
+
+els.armRawBtn.addEventListener('click', onArmRawWindow);
+els.checkRawBtn.addEventListener('click', onCheckRawWindow);
+els.downloadRawBtn.addEventListener('click', onDownloadRawWindow);
 
 // ---------------- Logging control ----------------
 function setLoggingUi(active, file, rows) {
@@ -884,6 +971,7 @@ els.startLogBtn.addEventListener('click', onStartLogging);
 els.stopLogBtn.addEventListener('click', onStopLogging);
 
 // ---------------- Boot ----------------
+updateConfigControls();
 initCharts();
 initSignalR();
 log('info', 'DPLL Ultrasonic DAQ UI ready');

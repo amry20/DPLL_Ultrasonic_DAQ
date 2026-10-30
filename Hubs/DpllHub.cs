@@ -64,11 +64,22 @@ public class DpllHub : Hub
         return base.OnConnectedAsync();
     }
 
+    // Explicit one-shot diagnostic capture; these do not alter PID configuration.
+    public async Task<bool> ArmRawWindow() => await _device.ArmRawWindowAsync();
+    public async Task<RawWindowInfo> GetRawWindowInfo() => await _device.GetRawWindowInfoAsync();
+    public async Task<string> ExportRawWindowCsv(string condition) =>
+        await _device.ExportRawWindowCsvAsync(condition);
+
     /// <summary>Enable/disable the 100 Hz firmware telemetry stream.</summary>
     public void SetStreamEnabled(bool enabled) => _device.EnableStream(enabled);
 
     /// <summary>Apply configuration changes (non-null fields only).</summary>
-    public void ApplyConfiguration(DpllConfigurationPatch patch) => _device.ApplyConfiguration(patch);
+    public async Task<bool> ApplyConfiguration(DpllConfigurationPatch patch)
+    {
+        try { return await _device.ApplyConfigurationAsync(patch); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        { throw new HubException(ex.Message); }
+    }
 
     /// <summary>Reset the control loop (clear integrator, restart from center).</summary>
     public void ResetLoop() => _device.ResetLoop();
@@ -93,9 +104,6 @@ public class DpllHub : Hub
 
     /// <summary>Load saved configuration from 24LC16B EEPROM and apply it.</summary>
     public void LoadConfigurationFromEeprom() => _device.LoadConfigurationFromEeprom();
-
-    /// <summary>Set input capture edge polarity (0=Rising, 1=Falling, 2=Both).</summary>
-    public void SetCaptureEdges(int refEdge, int zcdEdge) => _device.SetCaptureEdges(refEdge, zcdEdge);
 
     /// <summary>Reset configuration in 24LC16B EEPROM and restore defaults.</summary>
     public void ResetEepromConfiguration() => _device.ResetEepromConfiguration();

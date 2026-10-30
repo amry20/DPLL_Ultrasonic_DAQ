@@ -2,7 +2,7 @@ namespace DPLL_Ultrasonic_DAQ.Models;
 
 /// <summary>
 /// Partial configuration patch sent from the UI. Only the fields the user
-/// changed are applied; firmware confirms via a fresh <c>gain</c> readback.
+/// changed are applied; firmware confirms via a paced binary GET readback.
 /// </summary>
 public sealed class DpllConfigurationPatch
 {
@@ -24,7 +24,11 @@ public sealed class DpllConfigurationPatch
     public double? DdsMinFreq { get; set; }
     public double? DdsMaxFreq { get; set; }
     public int? DdsMcoClock { get; set; }
-    public int? CaptureRefEdge { get; set; }
-    public int? CaptureZcdEdge { get; set; }
+    public int? ReferenceCaptureEdge { get; set; }
+    public int? ZcdCaptureEdge { get; set; }
     public int? TrackingDirection { get; set; }
+
+    /// <summary>Source whose Kp/Ki/Kd/MaxSlew the user read before editing.
+    /// Required for gain edits; prevents a second client from changing the active bank underneath them.</summary>
+    public int? ExpectedGeneratorSource { get; set; }
 }

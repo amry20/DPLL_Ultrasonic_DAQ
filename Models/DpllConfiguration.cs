@@ -6,13 +6,28 @@ namespace DPLL_Ultrasonic_DAQ.Models;
 /// </summary>
 public sealed class DpllConfiguration
 {
-    /// <summary>Proportional gain, V/ns.</summary>
+    public DpllConfiguration Copy() => (DpllConfiguration)MemberwiseClone();
+
+    /// <summary>Exact GET_VERSION string, including firmware build identity when supplied.</summary>
+    public string? FirmwareVersion { get; set; }
+
+    /// <summary>True only after all required GETs in one paced readback have completed.</summary>
+    public bool ReadbackComplete { get; set; }
+
+    /// <summary>Capture edge: 0=rising, 1=falling, 2=both; null when GET is unsupported or unanswered.</summary>
+    public int? ReferenceCaptureEdge { get; set; }
+    public int? ZcdCaptureEdge { get; set; }
+
+    /// <summary>0=normal, 1=inverted; null when GET is unsupported or unanswered.</summary>
+    public int? TrackingDirection { get; set; }
+
+    /// <summary>Proportional gain, V/ns (DAC) or Hz/ns (DDS).</summary>
     public double Kp { get; set; }
 
-    /// <summary>Integral gain, V/ns/s.</summary>
+    /// <summary>Integral gain, V/(ns·s) (DAC) or Hz/(ns·s) (DDS).</summary>
     public double Ki { get; set; }
 
-    /// <summary>Derivative gain, V/ns/s (0 = disabled).</summary>
+    /// <summary>Derivative gain, V·s/ns (DAC) or Hz·s/ns (DDS); 0 = disabled.</summary>
     public double Kd { get; set; }
 
     /// <summary>Center voltage, volts.</summary>
@@ -21,7 +36,7 @@ public sealed class DpllConfiguration
     /// <summary>Target phase setpoint, ns.</summary>
     public double TargetPhase { get; set; }
 
-    /// <summary>Max DAC slew rate, V/s.</summary>
+    /// <summary>Max slew rate, V/s (DAC) or Hz/s (DDS).</summary>
     public double MaxSlew { get; set; }
 
     /// <summary>Manual mode flag (loop disengaged, DAC held by user).</summary>
@@ -60,11 +75,11 @@ public sealed class DpllConfiguration
         _ => "Unknown"
     };
 
-    /// <summary>Generator source: 0 = DAC (CD4046 VCO), 1 = DDS (AD9833).</summary>
-    public int GeneratorSource { get; set; }
+    /// <summary>Generator source: 0 = DAC (CD4046 VCO), 1 = DDS (AD9833), 2 = PWM Dither (STM32 TIM1 PA8).</summary>
+    public int GeneratorSource { get; set; } = 2;
 
-    /// <summary>True when DDS AD9833 is selected as generator source.</summary>
-    public bool IsDdsMode => GeneratorSource == 1;
+    /// <summary>True when frequency mode (DDS AD9833 or PWM Dither) is selected as generator source.</summary>
+    public bool IsDdsMode => GeneratorSource is 1 or 2;
 
     /// <summary>DDS center nominal frequency in Hz.</summary>
     public double DdsCenterFreq { get; set; } = 28000.0;
@@ -102,37 +117,5 @@ public sealed class DpllConfiguration
         5 => 8000000.0 / 268435456.0,
         6 => 4000000.0 / 268435456.0,
         _ => 8000000.0 / 268435456.0
-    };
-
-    /// <summary>Reference signal capture edge polarity: 0=Rising, 1=Falling, 2=Both.</summary>
-    public int CaptureRefEdge { get; set; } = 0;
-
-    /// <summary>Feedback / ZCD capture edge polarity: 0=Rising, 1=Falling, 2=Both.</summary>
-    public int CaptureZcdEdge { get; set; } = 0;
-
-    /// <summary>Name of reference capture edge.</summary>
-    public string CaptureRefEdgeName => CaptureRefEdge switch
-    {
-        1 => "Falling",
-        2 => "Both",
-        _ => "Rising"
-    };
-
-    /// <summary>Name of feedback/ZCD capture edge.</summary>
-    public string CaptureZcdEdgeName => CaptureZcdEdge switch
-    {
-        1 => "Falling",
-        2 => "Both",
-        _ => "Rising"
-    };
-
-    /// <summary>Control loop tracking direction: 0 = Normal (Series fs resonance), 1 = Inverted (Parallel fp resonance / inverting transfer function).</summary>
-    public int TrackingDirection { get; set; } = 0;
-
-    /// <summary>Name of tracking direction.</summary>
-    public string TrackingDirectionName => TrackingDirection switch
-    {
-        1 => "Inverted (Parallel fp)",
-        _ => "Normal (Series fs)"
     };
 }

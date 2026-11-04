@@ -60,6 +60,10 @@ public class DpllHub : Hub
         {
             Clients.Caller.SendAsync("Configuration", c);
         }
+        if (_device.LastSonicationStatus is { } s)
+        {
+            Clients.Caller.SendAsync("SonicationStatus", s);
+        }
         Clients.Caller.SendAsync("ConnectionState", (int)_device.State, _device.PortName);
         return base.OnConnectedAsync();
     }
@@ -107,4 +111,16 @@ public class DpllHub : Hub
 
     /// <summary>Reset configuration in 24LC16B EEPROM and restore defaults.</summary>
     public void ResetEepromConfiguration() => _device.ResetEepromConfiguration();
+
+    /// <summary>Start hardware timer pulse sonication sequence on PA5.</summary>
+    public void StartSonication(uint onTimeMs, uint restTimeMs, uint cycles) =>
+        _device.StartSonication(onTimeMs, restTimeMs, cycles);
+
+    /// <summary>Stop / abort pulse sonication immediately.</summary>
+    public void StopSonication() =>
+        _device.StopSonication();
+
+    /// <summary>Request latest pulse sonication status.</summary>
+    public void RequestSonicationStatus() =>
+        _device.RequestSonicationStatus();
 }

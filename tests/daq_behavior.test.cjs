@@ -33,7 +33,12 @@ function fixture(cfg = configuration()) {
       elements.set(id, {
         get value() { return value; }, set value(v) { value = String(v); },
         textContent: '', hidden: false, disabled: false, className: '', dataset: {},
-        listeners: {}, classList: { toggle() {} },
+        style: {},
+        listeners: {}, classList: {
+          toggle() {},
+          add(c) {},
+          remove(c) {}
+        },
         addEventListener(type, handler) { this.listeners[type] = handler; },
         appendChild() {}, removeChild() {}, querySelector() { return { textContent: '' }; },
       });
@@ -45,7 +50,14 @@ function fixture(cfg = configuration()) {
     signalR: { HubConnectionState: { Connected: 'Connected' } },
     document: { getElementById: element, createElement: () => element('log-entry') },
     recordLog: (level, message) => logs.push({ level, message }),
-    hubInvoke: async (method, patch) => { calls.push({ method, patch: patch === undefined ? undefined : JSON.parse(JSON.stringify(patch)) }); return true; },
+    hubInvoke: async (method, patch, ...rest) => {
+      const callObj = { method, patch: patch === undefined ? undefined : JSON.parse(JSON.stringify(patch)) };
+      if (rest.length > 0) {
+        callObj.extra = rest.map(r => JSON.parse(JSON.stringify(r)));
+      }
+      calls.push(callObj);
+      return true;
+    },
   });
   vm.runInContext(appWithoutBoot, context);
   vm.runInContext("log = recordLog; state.connected = true; connection = { state: 'Connected', invoke: (...args) => hubInvoke(...args) };", context);
@@ -308,4 +320,44 @@ test('frequency calibration sweep steps through target range, records deviation,
   assert.equal(results[2].target, 22000);
   assert.equal(element('downloadCalCsvBtn').disabled, false);
   assert.match(logs.at(-1).message, /Calibration completed successfully/);
+});
+
+test('pulse sonication controller starts, stops, and handles live status frames', async () => {
+  const f = fixture();
+  f.element('sonicOnTimeInput').value = '150';
+  f.element('sonicRestTimeInput').value = '250';
+  f.element('sonicCyclesInput').value = '5';
+  f.element('sonicOnTimeInput').listeners.input();
+
+  assert.equal(f.element('sonicCalcDisplay').textContent, '37.5% duty (400 ms period)');
+
+  // Test Start Sonication click
+  await f.element('startSonicBtn').listeners.click();
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].method, 'StartSonication');
+  assert.equal(f.calls[0].patch, 150);
+  assert.deepEqual(f.calls[0].extra, [250, 5]);
+
+  // Simulate active ON status frame
+  f.run('onSonicationStatus({ state: 1, currentCycle: 1, targetCycles: 5, remainingMs: 120, elapsedMs: 30 })');
+  assert.equal(f.element('sonicStatusChip').textContent, 'SONICATION ON');
+  assert.equal(f.element('startSonicBtn').disabled, true);
+  assert.equal(f.element('stopSonicBtn').disabled, false);
+  assert.equal(f.element('sonicProgressCycleText').textContent, 'Cycle 1 / 5 \u2014 ON');
+  assert.match(f.element('sonicProgressTimeText').textContent, /Phase Remaining: 120 ms/);
+
+  // Simulate REST status frame
+  f.run('onSonicationStatus({ state: 2, currentCycle: 1, targetCycles: 5, remainingMs: 200, elapsedMs: 200 })');
+  assert.equal(f.element('sonicStatusChip').textContent, 'RESTING');
+
+  // Test Stop Sonication click
+  await f.element('stopSonicBtn').listeners.click();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls[1].method, 'StopSonication');
+
+  // Simulate IDLE status frame
+  f.run('onSonicationStatus({ state: 0, currentCycle: 0, targetCycles: 5, remainingMs: 0, elapsedMs: 2000 })');
+  assert.equal(f.element('sonicStatusChip').textContent, 'IDLE');
+  assert.equal(f.element('startSonicBtn').disabled, false);
+  assert.equal(f.element('stopSonicBtn').disabled, true);
 });

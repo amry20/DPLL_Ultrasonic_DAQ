@@ -66,6 +66,9 @@ public static class Opcode
     public const ushort ARM_RAW_WINDOW = 0x003A;
     public const ushort GET_RAW_WINDOW_META = 0x003B;
     public const ushort GET_RAW_WINDOW_PAGE = 0x003C;
+    public const ushort START_SONICATION = 0x0040;
+    public const ushort STOP_SONICATION = 0x0041;
+    public const ushort GET_SONICATION_STATUS = 0x0042;
 }
 
 /// <summary>
@@ -249,4 +252,32 @@ public static class DpllProtocol
 
     /// <summary>Encode a small uint8 value as a single byte (e.g. signal-loss behavior).</summary>
     public static byte[] EncodeUInt8(byte value) => [value];
+
+    /// <summary>Encode 3 parameters for starting hardware timer pulse sonication.</summary>
+    public static byte[] EncodeStartSonication(uint onTimeMs, uint restTimeMs, uint cycles)
+    {
+        byte[] bytes = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(0, 4), onTimeMs);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4, 4), restTimeMs);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(8, 4), cycles);
+        return bytes;
+    }
+
+    /// <summary>Decode the 17-byte sonication status packet.</summary>
+    public static SonicationStatus DecodeSonicationStatus(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 17)
+        {
+            return new SonicationStatus { State = 0 };
+        }
+
+        return new SonicationStatus
+        {
+            State = payload[0],
+            CurrentCycle = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(1, 4)),
+            TargetCycles = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(5, 4)),
+            RemainingMs = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(9, 4)),
+            ElapsedMs = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(13, 4))
+        };
+    }
 }

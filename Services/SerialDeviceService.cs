@@ -79,6 +79,8 @@ public sealed class SerialDeviceService : IDisposable
     public event Action<DeviceConnectionState, string?>? ConnectionChanged;
     public event Action<DpllConfiguration>? ConfigurationReceived;
     public event Action<string, bool>? EepromActionCompleted; // (action: "save" | "load" | "reset", success)
+    public event Action<SonicationStatus>? SonicationStatusReceived;
+    public SonicationStatus? LastSonicationStatus { get; private set; }
 
     public SerialDeviceService(IOptionsMonitor<SerialOptions> optionsMonitor, ILogger<SerialDeviceService> logger)
     {
@@ -628,6 +630,15 @@ public sealed class SerialDeviceService : IDisposable
                     try { EepromActionCompleted?.Invoke("reset", ok); }
                     catch (Exception ex) { _logger.LogError(ex, "EepromActionCompleted handler threw."); }
                     RefreshConfiguration();
+                    break;
+                }
+
+                case Opcode.GET_SONICATION_STATUS:
+                {
+                    var sonicStatus = DpllProtocol.DecodeSonicationStatus(payload);
+                    LastSonicationStatus = sonicStatus;
+                    try { SonicationStatusReceived?.Invoke(sonicStatus); }
+                    catch (Exception ex) { _logger.LogError(ex, "SonicationStatusReceived handler threw."); }
                     break;
                 }
 
@@ -1233,6 +1244,18 @@ public sealed class SerialDeviceService : IDisposable
 
     /// <summary>Reset configuration in 24LC16B EEPROM and revert controller to factory defaults.</summary>
     public void ResetEepromConfiguration() => SendBinary(Opcode.RESET_CONFIG_EEPROM, default);
+
+    /// <summary>Start a hardware timer pulse sonication sequence on PA5.</summary>
+    public void StartSonication(uint onTimeMs, uint restTimeMs, uint cycles) =>
+        SendBinary(Opcode.START_SONICATION, DpllProtocol.EncodeStartSonication(onTimeMs, restTimeMs, cycles));
+
+    /// <summary>Stop / abort pulse sonication sequence immediately.</summary>
+    public void StopSonication() =>
+        SendBinary(Opcode.STOP_SONICATION, default);
+
+    /// <summary>Query current pulse sonication sequence status from firmware.</summary>
+    public void RequestSonicationStatus() =>
+        SendBinary(Opcode.GET_SONICATION_STATUS, default);
 
     public void Dispose()
     {

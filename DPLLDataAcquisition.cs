@@ -62,6 +62,10 @@ app.Lifetime.ApplicationStarted.Register(() =>
     device.EepromActionCompleted += (action, success) =>
         hubContext.Clients.All.SendAsync("EepromActionResult", action, success);
 
+    // Broadcast Sonication status frames.
+    device.SonicationStatusReceived += status =>
+        hubContext.Clients.All.SendAsync("SonicationStatus", status);
+
     try
     {
         device.Start();

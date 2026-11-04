@@ -123,7 +123,7 @@
           <div style="display: flex; gap: 8px; align-items: center;">
             <select id="generatorSourceInput" style="flex: 1;">
               <option value="0">DAC (CD4046 External VCO)</option>
-              <option value="1">DDS (AD9833 Internal Synthesizer)</option>
+              <option value="1">DDS (AD9833 - Retired, fallback to PWM)</option>
               <option value="2" selected>PWM Dither (STM32 TIM1 PA8)</option>
             </select>
             <button type="button" id="sourceHardwareWarningBtn" class="btn btn-ghost" title="Inspect hardware connection requirements for this source" style="white-space: nowrap; font-size: 12px; padding: 6px 10px;">⚠️ Hardware Info</button>
@@ -290,6 +290,54 @@
         <button id="clearLogBtn" class="btn btn-ghost">Clear</button>
       </div>
       <div id="log" class="log" aria-live="polite"></div>
+    </section>
+
+    <!-- ======================= Pulse Sonication Controller ======================= -->
+    <section class="panel sonic-panel" id="sonicationPanel">
+      <div class="panel-head">
+        <h2>Pulse Sonication Controller <span class="chip chip-dim" style="font-size: 11px; margin-left: 8px;">PA5 HW Timer</span></h2>
+        <div class="sonic-status-badge">
+          <span class="chip" id="sonicStatusChip">IDLE</span>
+        </div>
+      </div>
+      <p class="sonic-help">
+        Hardware-timed pulse sonication gating on pin <strong>PA5</strong> synchronized with PA8 PWM square wave output.
+        Configure the ON duration (active sonication), Rest time (cooldown pause), and repetition cycles.
+      </p>
+
+      <div class="config-grid sonic-grid">
+        <div class="field">
+          <label for="sonicOnTimeInput">ON Duration <span class="unit">(ms)</span></label>
+          <input id="sonicOnTimeInput" type="number" min="1" max="3600000" step="10" value="100" />
+        </div>
+        <div class="field">
+          <label for="sonicRestTimeInput">Rest Duration <span class="unit">(ms)</span></label>
+          <input id="sonicRestTimeInput" type="number" min="0" max="3600000" step="10" value="200" />
+        </div>
+        <div class="field">
+          <label for="sonicCyclesInput">Cycles <span class="unit">(0 = Continuous)</span></label>
+          <input id="sonicCyclesInput" type="number" min="0" max="1000000" step="1" value="10" />
+        </div>
+        <div class="field">
+          <label>Calculated Duty / Period</label>
+          <div class="sonic-calc-display mono" id="sonicCalcDisplay">33.3% duty (300 ms)</div>
+        </div>
+      </div>
+
+      <div class="sonic-controls">
+        <button id="startSonicBtn" class="btn btn-primary">▶ Start Sonication</button>
+        <button id="stopSonicBtn" class="btn btn-danger" disabled>⏹ Stop / Abort</button>
+      </div>
+
+      <div class="sonic-progress-wrapper" id="sonicProgressWrapper">
+        <div class="sonic-progress-header">
+          <span id="sonicProgressCycleText">Cycle: 0 / 0</span>
+          <span id="sonicProgressTimeText" class="mono">Phase Remaining: 0 ms | Elapsed: 0.0 s</span>
+        </div>
+        <div class="sonic-progress-bar">
+          <div class="sonic-progress-fill" id="sonicProgressFill" style="width: 0%;"></div>
+        </div>
+      </div>
     </section>
 
     <!-- ======================= Frequency Calibration & Sweep ======================= -->

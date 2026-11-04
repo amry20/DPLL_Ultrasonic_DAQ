@@ -143,6 +143,17 @@ const els = {
   calProgressFill: $('calProgressFill'),
   calTable: $('calTable'),
   calTableBody: $('calTableBody'),
+  sonicOnTimeInput: $('sonicOnTimeInput'),
+  sonicRestTimeInput: $('sonicRestTimeInput'),
+  sonicCyclesInput: $('sonicCyclesInput'),
+  sonicCalcDisplay: $('sonicCalcDisplay'),
+  startSonicBtn: $('startSonicBtn'),
+  stopSonicBtn: $('stopSonicBtn'),
+  sonicStatusChip: $('sonicStatusChip'),
+  sonicProgressWrapper: $('sonicProgressWrapper'),
+  sonicProgressCycleText: $('sonicProgressCycleText'),
+  sonicProgressTimeText: $('sonicProgressTimeText'),
+  sonicProgressFill: $('sonicProgressFill'),
   log: $('log'),
   clearLogBtn: $('clearLogBtn'),
 };
@@ -161,6 +172,7 @@ function initSignalR() {
   connection.on('Configuration', onConfiguration);
   connection.on('ConnectionState', onConnectionState);
   connection.on('EepromActionResult', onEepromActionResult);
+  connection.on('SonicationStatus', onSonicationStatus);
 
   connection.onreconnecting(() => {
     log('warn', 'SignalR reconnecting…');
@@ -300,7 +312,7 @@ function onConfiguration(cfg) {
   els.kdInput.value = fmt(cfg.Kd, 7);
   els.centerInput.value = fmt(cfg.CenterVoltage, 3);
   els.targetInput.value = fmt(cfg.TargetPhase, 1);
-  els.slewInput.value = fmt(cfg.MaxSlew, cfg.GeneratorSource === 1 ? 0 : 2);
+  els.slewInput.value = fmt(cfg.MaxSlew, (cfg.GeneratorSource === 1 || cfg.GeneratorSource === 2) ? 0 : 2);
   els.loopInput.value = cfg.LoopPeriodMs;
   els.thrInput.value = fmt(cfg.LockThresholdNs, 0);
   els.holdInput.value = cfg.LockHoldCycles;
@@ -818,11 +830,12 @@ function showSourceHardwareModal(targetSource) {
       'Operating without routing PA8 to the gate driver and loopback wire to PA0 will leave the transducer without driving signals and break feedback tracking.';
     els.jumperModal.hidden = false;
   } else if (targetSource === 1) {
-    if (els.modalSourceText) els.modalSourceText.textContent = 'DDS (AD9833)';
+    if (els.modalSourceText) els.modalSourceText.textContent = 'DDS (AD9833 - Retired)';
     if (els.modalReqText) els.modalReqText.innerHTML =
-      'Ensure the physical resistor jumper on the PCB is routed to the <strong>AD9833 DDS output</strong>, NOT to the CD4046 VCO or TIM1 PA8!';
+      '<strong>Notice:</strong> AD9833 DDS is retired because pin PA5 is dedicated to the <strong>Pulse Sonication Controller</strong>.<br>' +
+      'Firmware will automatically fallback to <strong>PWM Dither (STM32 TIM1 PA8)</strong> when this source is applied.';
     if (els.modalSubText) els.modalSubText.textContent =
-      'Operating without routing the hardware connections properly will leave the transducer without driving signals and break feedback tracking.';
+      'Ensure PA8 is connected as the square wave driver output and looped back to PA0.';
     els.jumperModal.hidden = false;
   } else if (targetSource === 0) {
     if (els.modalSourceText) els.modalSourceText.textContent = 'DAC (CD4046 External VCO)';
@@ -1263,6 +1276,151 @@ if (els.clearCalBtn) els.clearCalBtn.addEventListener('click', clearCalibrationR
     els[id].addEventListener('input', () => { els[id].dataset.userEdited = 'true'; });
   }
 });
+
+// ---------------- Pulse Sonication Controller (PA5 Hardware Timer) ----------------
+let lastSonicState = 0;
+
+function updateSonicCalcDisplay() {
+  if (!els.sonicOnTimeInput || !els.sonicRestTimeInput || !els.sonicCalcDisplay) return;
+  const onMs = Math.max(1, parseInt(els.sonicOnTimeInput.value, 10) || 100);
+  const restMs = Math.max(0, parseInt(els.sonicRestTimeInput.value, 10) || 0);
+  const periodMs = onMs + restMs;
+  const dutyPct = periodMs > 0 ? ((onMs / periodMs) * 100).toFixed(1) : '100.0';
+  els.sonicCalcDisplay.textContent = `${dutyPct}% duty (${periodMs} ms period)`;
+}
+
+if (els.sonicOnTimeInput) els.sonicOnTimeInput.addEventListener('input', updateSonicCalcDisplay);
+if (els.sonicRestTimeInput) els.sonicRestTimeInput.addEventListener('input', updateSonicCalcDisplay);
+
+const sonicRun = { hasRun: false, abortedByUser: false, target: 0, finished: 0 };
+
+function onSonicationStatus(status) {
+  if (!status) return;
+
+  const state = status.state ?? status.State ?? 0;
+  const currentCycle = status.currentCycle ?? status.CurrentCycle ?? 0;
+  const targetCycles = status.targetCycles ?? status.TargetCycles ?? 0;
+  const remainingMs = status.remainingMs ?? status.RemainingMs ?? 0;
+  const elapsedMs = status.elapsedMs ?? status.ElapsedMs ?? 0;
+
+  // Update Status Chip
+  if (els.sonicStatusChip) {
+    els.sonicStatusChip.className = 'chip';
+    if (state === 1) {
+      els.sonicStatusChip.classList.add('chip-ok');
+      els.sonicStatusChip.textContent = 'SONICATION ON';
+    } else if (state === 2) {
+      els.sonicStatusChip.classList.add('chip-warn');
+      els.sonicStatusChip.textContent = 'RESTING';
+    } else {
+      els.sonicStatusChip.textContent = 'IDLE';
+    }
+  }
+
+  // Update Buttons
+  const isActive = (state === 1 || state === 2);
+  if (els.startSonicBtn) els.startSonicBtn.disabled = isActive;
+  if (els.stopSonicBtn) els.stopSonicBtn.disabled = !isActive;
+
+  // Bar = number of FINISHED cycles / total cycles (a cycle = ON + REST).
+  // Cycle 3 of 10 running -> 2 finished -> 20%. The bar only moves forward.
+  // When the sequence ends (firmware reports IDLE with cycle=0) the last
+  // value is held: 100% "Completed", or the reached value "Aborted".
+  if (isActive) {
+    sonicRun.target = targetCycles;
+    sonicRun.finished = Math.max(0, currentCycle - 1);
+    sonicRun.abortedByUser = false;
+    sonicRun.hasRun = true;
+  } else if (sonicRun.hasRun && !sonicRun.abortedByUser && sonicRun.target > 0) {
+    sonicRun.finished = sonicRun.target; // natural completion
+  }
+
+  let cyclePct = 0;
+  if (sonicRun.hasRun && sonicRun.target > 0) {
+    cyclePct = Math.min(100, (sonicRun.finished / sonicRun.target) * 100);
+  }
+  const targetLabel = sonicRun.target === 0 ? '\u221E' : sonicRun.target;
+
+  if (els.sonicProgressCycleText) {
+    if (isActive) {
+      els.sonicProgressCycleText.textContent =
+        `Cycle ${currentCycle} / ${targetLabel} \u2014 ${state === 1 ? 'ON' : 'REST'}`;
+    } else if (sonicRun.hasRun) {
+      els.sonicProgressCycleText.textContent = sonicRun.abortedByUser
+        ? `Aborted \u2014 ${sonicRun.finished} / ${targetLabel} cycles done`
+        : `Completed \u2014 ${sonicRun.finished} / ${targetLabel} cycles done`;
+    } else {
+      els.sonicProgressCycleText.textContent = 'Idle';
+    }
+  }
+
+  if (els.sonicProgressTimeText) {
+    const elapsedSec = (elapsedMs / 1000.0).toFixed(1);
+    if (isActive) {
+      const pctStr = targetCycles > 0 ? `${cyclePct.toFixed(0)}% done | ` : '';
+      els.sonicProgressTimeText.textContent = `${pctStr}Phase Remaining: ${remainingMs} ms | Elapsed: ${elapsedSec} s`;
+    } else if (sonicRun.hasRun && sonicRun.target > 0) {
+      els.sonicProgressTimeText.textContent = `${cyclePct.toFixed(0)}%`;
+    } else {
+      els.sonicProgressTimeText.textContent = '';
+    }
+  }
+
+  if (els.sonicProgressFill) {
+    els.sonicProgressFill.className = 'sonic-progress-fill';
+    if (isActive && targetCycles === 0) {
+      els.sonicProgressFill.classList.add('continuous');
+      els.sonicProgressFill.style.width = '100%';
+    } else {
+      if (state === 2) els.sonicProgressFill.classList.add('phase-rest');
+      els.sonicProgressFill.style.width = `${cyclePct}%`;
+    }
+  }
+
+  // Log state transitions
+  if (state !== lastSonicState) {
+    if (state === 1) {
+      log('ok', `[Sonication] Phase ON: Cycle ${currentCycle}/${targetCycles || '\u221E'}`);
+    } else if (state === 2) {
+      log('info', `[Sonication] Phase REST: Pausing between cycles`);
+    } else if (state === 0 && lastSonicState !== 0) {
+      log('ok', `[Sonication] Sequence completed (${(elapsedMs / 1000.0).toFixed(2)} s total)`);
+    }
+    lastSonicState = state;
+  }
+}
+if (els.startSonicBtn) {
+  els.startSonicBtn.addEventListener('click', async () => {
+    const onMs = Math.max(1, parseInt(els.sonicOnTimeInput?.value, 10) || 100);
+    const restMs = Math.max(0, parseInt(els.sonicRestTimeInput?.value, 10) || 0);
+    const cycles = Math.max(0, parseInt(els.sonicCyclesInput?.value, 10) || 0);
+
+    log('info', `Starting pulse sonication: ON=${onMs} ms, Rest=${restMs} ms, Cycles=${cycles === 0 ? 'Continuous' : cycles}`);
+    try {
+      await connection.invoke('StartSonication', onMs, restMs, cycles);
+      if (els.startSonicBtn) els.startSonicBtn.disabled = true;
+      if (els.stopSonicBtn) els.stopSonicBtn.disabled = false;
+    } catch (err) {
+      log('danger', `Failed to start sonication: ${err.message || err}`);
+    }
+  });
+}
+
+if (els.stopSonicBtn) {
+  els.stopSonicBtn.addEventListener('click', async () => {
+    log('warn', 'Aborting pulse sonication sequence...');
+    try {
+      sonicRun.abortedByUser = true;
+      await connection.invoke('StopSonication');
+      if (els.startSonicBtn) els.startSonicBtn.disabled = false;
+      if (els.stopSonicBtn) els.stopSonicBtn.disabled = true;
+    } catch (err) {
+      log('danger', `Failed to stop sonication: ${err.message || err}`);
+    }
+  });
+}
+
+updateSonicCalcDisplay();
 
 // ---------------- Boot ----------------
 updateConfigControls();

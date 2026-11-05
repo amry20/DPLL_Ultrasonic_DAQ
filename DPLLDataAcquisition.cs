@@ -66,6 +66,10 @@ app.Lifetime.ApplicationStarted.Register(() =>
     device.SonicationStatusReceived += status =>
         hubContext.Clients.All.SendAsync("SonicationStatus", status);
 
+    // Broadcast Bode Phase Response sweep point frames.
+    device.BodeSweepPointReceived += point =>
+        hubContext.Clients.All.SendAsync("BodeSweepPoint", point);
+
     try
     {
         device.Start();

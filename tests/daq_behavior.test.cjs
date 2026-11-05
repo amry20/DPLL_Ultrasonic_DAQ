@@ -361,3 +361,59 @@ test('pulse sonication controller starts, stops, and handles live status frames'
   assert.equal(f.element('startSonicBtn').disabled, false);
   assert.equal(f.element('stopSonicBtn').disabled, true);
 });
+
+test('bode phase response sweep invokes StartBodeSweep, plots points in deg/ns, and detects crossings', async () => {
+  const f = fixture();
+  f.element('bodeStartFreqInput').value = '28000';
+  f.element('bodeStopFreqInput').value = '28200';
+  f.element('bodeStepFreqInput').value = '100';
+  f.element('bodePulseOnInput').value = '60';
+  f.element('bodeRestGapInput').value = '150';
+  f.element('bodeStartFreqInput').listeners.input();
+
+  assert.match(f.element('bodeCalcDisplay').textContent, /3 steps/);
+
+  await f.element('startBodeBtn').listeners.click();
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].method, 'StartBodeSweep');
+  assert.equal(f.calls[0].patch, 28000);
+  assert.deepEqual(f.calls[0].extra, [28200, 100, 60, 150]);
+
+  // Simulate 3 BodeSweepPoint frames crossing 0 deg and 600 ns target phase
+  f.run('state.config = { TargetPhase: 600 }');
+  f.run('onBodeSweepPoint({ State: 1, Valid: 1, StepIndex: 1, TotalSteps: 3, SampleCount: 30, TargetFreqHz: 28000, MeasuredFreqHz: 28000, PhaseDiffNs: -1000, PhaseDegrees: -10 })');
+  f.run('onBodeSweepPoint({ State: 1, Valid: 1, StepIndex: 2, TotalSteps: 3, SampleCount: 32, TargetFreqHz: 28100, MeasuredFreqHz: 28100, PhaseDiffNs: 200, PhaseDegrees: 2 })');
+  f.run('onBodeSweepPoint({ State: 0, Valid: 1, StepIndex: 3, TotalSteps: 3, SampleCount: 31, TargetFreqHz: 28200, MeasuredFreqHz: 28200, PhaseDiffNs: 1000, PhaseDegrees: 10 })');
+
+  assert.equal(f.run('bodeState.running'), false);
+  assert.equal(f.run('bodeState.results.length'), 3);
+  assert.equal(f.element('bodeStatusChip').textContent, 'Complete');
+  assert.equal(f.element('downloadBodeCsvBtn').disabled, false);
+  assert.match(f.element('bodeZeroCrossText').textContent, /28083\.3 Hz/);
+  assert.match(f.element('bodeTargetCrossText').textContent, /28150\.0 Hz/);
+
+  // Toggle unit to nanoseconds
+  f.element('bodeUnitNsBtn').listeners.click();
+  assert.equal(f.run('bodeState.unit'), 'ns');
+  assert.equal(f.element('bodeChartUnitLabel').textContent, '(ns vs Hz)');
+
+  // Test snapshot copy & PNG export buttons enabled and functional
+  assert.equal(f.element('copyBodeImgBtn').disabled, false);
+  assert.equal(f.element('downloadBodeImgBtn').disabled, false);
+  f.run("state.charts = { bode: { setOption() {}, getDataURL: () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' } }");
+  await f.element('downloadBodeImgBtn').listeners.click();
+  assert.match(f.logs.at(-1).message, /Plot PNG exported: bode_phase_plot_ns_/);
+
+  // Test clicking/selecting a point on the Bode plot and using it as Target Phase / Center Frequency
+  f.run('selectBodePoint(bodeState.results[2])');
+  assert.equal(f.element('bodeSelectedPointBar').hidden, false);
+  assert.match(f.element('bodeSelectedPointText').textContent, /28200\.0 Hz/);
+  assert.match(f.element('bodeSelectedPointText').textContent, /\+10\.00°/);
+  assert.match(f.element('bodeSelectedPointText').textContent, /\+1000\.0 ns/);
+
+  f.element('bodeUseTargetPhaseBtn').listeners.click();
+  assert.equal(f.element('targetInput').value, '1000.0');
+
+  f.element('bodeUseCenterFreqBtn').listeners.click();
+  assert.equal(f.element('ddsCenterInput').value, '28200');
+});

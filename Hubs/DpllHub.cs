@@ -123,4 +123,12 @@ public class DpllHub : Hub
     /// <summary>Request latest pulse sonication status.</summary>
     public void RequestSonicationStatus() =>
         _device.RequestSonicationStatus();
+
+    /// <summary>Start firmware-driven Phase Response (Bode Plot) sweep.</summary>
+    public void StartBodeSweep(double startFreqHz, double stopFreqHz, double stepFreqHz, uint pulseOnMs, uint restGapMs) =>
+        _device.StartBodeSweep((float)startFreqHz, (float)stopFreqHz, (float)stepFreqHz, pulseOnMs, restGapMs);
+
+    /// <summary>Stop / abort firmware-driven Phase Response (Bode Plot) sweep.</summary>
+    public void StopBodeSweep() =>
+        _device.StopBodeSweep();
 }

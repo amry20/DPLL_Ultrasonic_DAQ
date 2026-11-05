@@ -81,6 +81,7 @@ public sealed class SerialDeviceService : IDisposable
     public event Action<string, bool>? EepromActionCompleted; // (action: "save" | "load" | "reset", success)
     public event Action<SonicationStatus>? SonicationStatusReceived;
     public SonicationStatus? LastSonicationStatus { get; private set; }
+    public event Action<BodeSweepPoint>? BodeSweepPointReceived;
 
     public SerialDeviceService(IOptionsMonitor<SerialOptions> optionsMonitor, ILogger<SerialDeviceService> logger)
     {
@@ -639,6 +640,14 @@ public sealed class SerialDeviceService : IDisposable
                     LastSonicationStatus = sonicStatus;
                     try { SonicationStatusReceived?.Invoke(sonicStatus); }
                     catch (Exception ex) { _logger.LogError(ex, "SonicationStatusReceived handler threw."); }
+                    break;
+                }
+
+                case Opcode.BODE_SWEEP_POINT:
+                {
+                    var bodePoint = DpllProtocol.DecodeBodeSweepPoint(payload);
+                    try { BodeSweepPointReceived?.Invoke(bodePoint); }
+                    catch (Exception ex) { _logger.LogError(ex, "BodeSweepPointReceived handler threw."); }
                     break;
                 }
 
@@ -1256,6 +1265,14 @@ public sealed class SerialDeviceService : IDisposable
     /// <summary>Query current pulse sonication sequence status from firmware.</summary>
     public void RequestSonicationStatus() =>
         SendBinary(Opcode.GET_SONICATION_STATUS, default);
+
+    /// <summary>Start firmware-driven Phase Response (Bode Plot) sweep.</summary>
+    public void StartBodeSweep(float startFreqHz, float stopFreqHz, float stepFreqHz, uint pulseOnMs, uint restGapMs) =>
+        SendBinary(Opcode.START_BODE_SWEEP, DpllProtocol.EncodeStartBodeSweep(startFreqHz, stopFreqHz, stepFreqHz, pulseOnMs, restGapMs));
+
+    /// <summary>Stop / abort firmware-driven Phase Response (Bode Plot) sweep.</summary>
+    public void StopBodeSweep() =>
+        SendBinary(Opcode.STOP_BODE_SWEEP, default);
 
     public void Dispose()
     {

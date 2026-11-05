@@ -69,6 +69,9 @@ public static class Opcode
     public const ushort START_SONICATION = 0x0040;
     public const ushort STOP_SONICATION = 0x0041;
     public const ushort GET_SONICATION_STATUS = 0x0042;
+    public const ushort START_BODE_SWEEP = 0x0043;
+    public const ushort STOP_BODE_SWEEP = 0x0044;
+    public const ushort BODE_SWEEP_POINT = 0x0045;
 }
 
 /// <summary>
@@ -278,6 +281,40 @@ public static class DpllProtocol
             TargetCycles = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(5, 4)),
             RemainingMs = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(9, 4)),
             ElapsedMs = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(13, 4))
+        };
+    }
+
+    /// <summary>Encode 5 parameters (20 bytes) for starting firmware-driven Bode Phase Response sweep.</summary>
+    public static byte[] EncodeStartBodeSweep(float startFreqHz, float stopFreqHz, float stepFreqHz, uint pulseOnMs, uint restGapMs)
+    {
+        byte[] bytes = new byte[20];
+        BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(0, 4), startFreqHz);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(4, 4), stopFreqHz);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(8, 4), stepFreqHz);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(12, 4), pulseOnMs);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16, 4), restGapMs);
+        return bytes;
+    }
+
+    /// <summary>Decode the 24-byte BodeSweepPointPacket from firmware.</summary>
+    public static BodeSweepPoint DecodeBodeSweepPoint(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 24)
+        {
+            return new BodeSweepPoint { State = 0 };
+        }
+
+        return new BodeSweepPoint
+        {
+            State = payload[0],
+            Valid = payload[1],
+            StepIndex = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(2, 2)),
+            TotalSteps = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(4, 2)),
+            SampleCount = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(6, 2)),
+            TargetFreqHz = ReadFloatLe(payload, 8),
+            MeasuredFreqHz = ReadFloatLe(payload, 12),
+            PhaseDiffNs = ReadFloatLe(payload, 16),
+            PhaseDegrees = ReadFloatLe(payload, 20)
         };
     }
 }

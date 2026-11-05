@@ -154,6 +154,38 @@ const els = {
   sonicProgressCycleText: $('sonicProgressCycleText'),
   sonicProgressTimeText: $('sonicProgressTimeText'),
   sonicProgressFill: $('sonicProgressFill'),
+  bodeStartFreqInput: $('bodeStartFreqInput'),
+  bodeStopFreqInput: $('bodeStopFreqInput'),
+  bodeStepFreqInput: $('bodeStepFreqInput'),
+  bodePulseOnInput: $('bodePulseOnInput'),
+  bodeRestGapInput: $('bodeRestGapInput'),
+  bodeCalcDisplay: $('bodeCalcDisplay'),
+  startBodeBtn: $('startBodeBtn'),
+  stopBodeBtn: $('stopBodeBtn'),
+  bodeUnitDegBtn: $('bodeUnitDegBtn'),
+  bodeUnitNsBtn: $('bodeUnitNsBtn'),
+  copyBodeImgBtn: $('copyBodeImgBtn'),
+  downloadBodeImgBtn: $('downloadBodeImgBtn'),
+  downloadBodeCsvBtn: $('downloadBodeCsvBtn'),
+  clearBodeBtn: $('clearBodeBtn'),
+  bodeStatusChip: $('bodeStatusChip'),
+  bodeProgressWrapper: $('bodeProgressWrapper'),
+  bodeProgressText: $('bodeProgressText'),
+  bodeLiveStats: $('bodeLiveStats'),
+  bodeProgressFill: $('bodeProgressFill'),
+  bodeSummaryBar: $('bodeSummaryBar'),
+  bodeZeroCrossText: $('bodeZeroCrossText'),
+  bodeTargetCrossText: $('bodeTargetCrossText'),
+  bodeApplyCenterBtn: $('bodeApplyCenterBtn'),
+  bodeSelectedPointBar: $('bodeSelectedPointBar'),
+  bodeSelectedPointText: $('bodeSelectedPointText'),
+  bodeUseTargetPhaseBtn: $('bodeUseTargetPhaseBtn'),
+  bodeUseCenterFreqBtn: $('bodeUseCenterFreqBtn'),
+  bodeApplyPointRamBtn: $('bodeApplyPointRamBtn'),
+  bodeChartUnitLabel: $('bodeChartUnitLabel'),
+  bodeChart: $('bodeChart'),
+  bodeTable: $('bodeTable'),
+  bodeTableBody: $('bodeTableBody'),
   log: $('log'),
   clearLogBtn: $('clearLogBtn'),
 };
@@ -173,6 +205,7 @@ function initSignalR() {
   connection.on('ConnectionState', onConnectionState);
   connection.on('EepromActionResult', onEepromActionResult);
   connection.on('SonicationStatus', onSonicationStatus);
+  connection.on('BodeSweepPoint', onBodeSweepPoint);
 
   connection.onreconnecting(() => {
     log('warn', 'SignalR reconnecting…');
@@ -294,6 +327,13 @@ function onConfiguration(cfg) {
   if (els.calStopFreqInput && cfg.DdsMaxFreq !== undefined && !els.calStopFreqInput.dataset.userEdited) {
     els.calStopFreqInput.value = cfg.DdsMaxFreq;
   }
+  if (els.bodeStartFreqInput && cfg.DdsMinFreq !== undefined && !els.bodeStartFreqInput.dataset.userEdited) {
+    els.bodeStartFreqInput.value = cfg.DdsMinFreq;
+  }
+  if (els.bodeStopFreqInput && cfg.DdsMaxFreq !== undefined && !els.bodeStopFreqInput.dataset.userEdited) {
+    els.bodeStopFreqInput.value = cfg.DdsMaxFreq;
+  }
+  updateBodeCalcDisplay();
   if (els.manualDdsSlider && cfg.DdsMinFreq !== undefined && cfg.DdsMaxFreq !== undefined) {
     els.manualDdsSlider.min = cfg.DdsMinFreq;
     els.manualDdsSlider.max = cfg.DdsMaxFreq;
@@ -386,8 +426,12 @@ function setUiConnected(connected) {
   if (els.manualDdsSetBtn) els.manualDdsSetBtn.disabled = !connected;
   els.startLogBtn.disabled = !connected || state.logging;
   if (els.startCalBtn) els.startCalBtn.disabled = !connected || calState.running;
+  if (els.startBodeBtn) els.startBodeBtn.disabled = !connected || bodeState.running;
   if (!connected && calState.running) {
     stopCalibrationSweep();
+  }
+  if (!connected && bodeState.running) {
+    onBodeSweepPoint({ State: 2, StepIndex: 0, TotalSteps: 0 });
   }
   if (!connected) {
     state.telemetry = null;
@@ -537,6 +581,47 @@ function initCharts() {
     const ec = echarts.init(dom, null, { renderer: 'canvas', useDirtyRect: true });
     ec.setOption(makeChartOption(def));
     state.charts[key] = ec;
+  }
+  const bodeDom = document.getElementById('bodeChart');
+  if (bodeDom) {
+    const bodeEc = echarts.init(bodeDom, null, { renderer: 'canvas', useDirtyRect: true });
+    bodeEc.setOption(makeBodeChartOption('deg'));
+    if (typeof bodeEc.on === 'function') {
+      bodeEc.on('click', (params) => {
+        const pt = params?.data?.meta;
+        if (pt && pt.valid) {
+          selectBodePoint(pt);
+        }
+      });
+    }
+    if (typeof bodeEc.getZr === 'function') {
+      const zr = bodeEc.getZr();
+      if (zr && typeof zr.on === 'function') {
+        zr.on('click', (ev) => {
+          const validPts = bodeState.results.filter(r => r.valid);
+          if (validPts.length === 0) return;
+          const px = [ev.offsetX, ev.offsetY];
+          if (typeof bodeEc.containPixel === 'function' && !bodeEc.containPixel('grid', px)) return;
+          if (typeof bodeEc.convertFromPixel === 'function') {
+            const coord = bodeEc.convertFromPixel({ seriesIndex: 0 }, px);
+            if (Array.isArray(coord) && typeof coord[0] === 'number' && !Number.isNaN(coord[0])) {
+              const clickedFreq = coord[0];
+              let nearest = validPts[0];
+              let minDiff = Math.abs(nearest.target - clickedFreq);
+              for (const p of validPts) {
+                const d = Math.abs(p.target - clickedFreq);
+                if (d < minDiff) {
+                  minDiff = d;
+                  nearest = p;
+                }
+              }
+              selectBodePoint(nearest);
+            }
+          }
+        });
+      }
+    }
+    state.charts.bode = bodeEc;
   }
   // resize all charts when window resizes
   window.addEventListener('resize', () => {
@@ -1421,6 +1506,783 @@ if (els.stopSonicBtn) {
 }
 
 updateSonicCalcDisplay();
+
+// ---------------- Phase Response & Bode Plot Sweep ----------------
+const bodeState = {
+  running: false,
+  unit: 'deg', // 'deg' | 'ns'
+  results: [],
+  selectedPoint: null,
+  targetCrossFreqHz: null,
+  zeroCrossFreqHz: null,
+  pulseOnMs: 60,
+  restGapMs: 150,
+};
+
+function flashInputField(el) {
+  if (!el || !el.classList) return;
+  el.classList.remove('input-flash-highlight');
+  void el.offsetWidth;
+  el.classList.add('input-flash-highlight');
+}
+
+function selectBodePoint(pt) {
+  if (!pt || !pt.valid) return;
+  bodeState.selectedPoint = pt;
+  if (els.bodeSelectedPointBar) els.bodeSelectedPointBar.hidden = false;
+  if (els.bodeSelectedPointText) {
+    const degSign = pt.phaseDeg >= 0 ? '+' : '';
+    const nsSign = pt.phaseNs >= 0 ? '+' : '';
+    els.bodeSelectedPointText.textContent =
+      `#${pt.step} · ${pt.target.toFixed(1)} Hz (Meas: ${pt.measured.toFixed(2)} Hz) · Phase: ${degSign}${pt.phaseDeg.toFixed(2)}° (${nsSign}${pt.phaseNs.toFixed(1)} ns)`;
+  }
+  if (els.bodeTableBody && els.bodeTableBody.children) {
+    for (const row of Array.from(els.bodeTableBody.children)) {
+      if (row.dataset && Number(row.dataset.step) === pt.step) {
+        row.classList.add('bode-row-selected');
+      } else if (row.classList) {
+        row.classList.remove('bode-row-selected');
+      }
+    }
+  }
+  refreshBodeChartData();
+}
+
+function makeBodeChartOption(unit) {
+  const isDeg = unit === 'deg';
+  const yLabel = isDeg ? 'Phase (°)' : 'Phase (ns)';
+  const decimals = isDeg ? 2 : 1;
+  return {
+    animation: false,
+    backgroundColor: 'transparent',
+    grid: { top: 18, right: 20, bottom: 38, left: 64 },
+    xAxis: {
+      type: 'value',
+      scale: true,
+      name: 'Frequency (Hz)',
+      nameLocation: 'middle',
+      nameGap: 24,
+      nameTextStyle: { color: '#8b9bb0', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#223042' } },
+      axisTick: { lineStyle: { color: '#223042' } },
+      axisLabel: { color: '#8b9bb0', fontSize: 11, formatter: v => Number(v).toFixed(0) },
+      splitLine: { lineStyle: { color: '#223042', type: 'dashed' } },
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      name: yLabel,
+      nameLocation: 'middle',
+      nameGap: 46,
+      nameTextStyle: { color: '#8b9bb0', fontSize: 11 },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: '#8b9bb0', fontSize: 11, formatter: v => Number(v).toFixed(decimals) },
+      splitLine: { lineStyle: { color: '#223042', type: 'dashed' } },
+    },
+    series: [
+      {
+        name: yLabel,
+        type: 'line',
+        data: [],
+        symbol: 'circle',
+        symbolSize: 5,
+        lineStyle: { color: '#a855f7', width: 2 },
+        itemStyle: { color: '#c084fc' },
+        areaStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: '#a855f738' },
+              { offset: 1, color: '#a855f700' },
+            ],
+          },
+        },
+      },
+    ],
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#121822',
+      borderColor: '#223042',
+      textStyle: { color: '#e6edf5', fontSize: 12 },
+      formatter: (params) => {
+        if (!params || !params.length || !params[0].data) return '';
+        const d = params[0].data;
+        const pt = d.meta;
+        if (!pt) return `${Number(d.value[0]).toFixed(1)} Hz: <b>${Number(d.value[1]).toFixed(decimals)}</b>`;
+        return [
+          `Step #${pt.step} · <b>${pt.target.toFixed(1)} Hz</b> (Meas: ${pt.measured.toFixed(2)} Hz)`,
+          `Phase (°): <b>${pt.phaseDeg >= 0 ? '+' : ''}${pt.phaseDeg.toFixed(2)}°</b>`,
+          `Phase (ns): <b>${pt.phaseNs >= 0 ? '+' : ''}${pt.phaseNs.toFixed(1)} ns</b>`,
+          `Samples: <b>${pt.samples}</b> (${pt.valid ? 'Valid ZCD' : 'No ZCD'})`,
+          `<span style="color:#fbbf24;font-size:11px;">Click point to select as Target Phase / Center Freq</span>`,
+        ].join('<br/>');
+      },
+    },
+  };
+}
+
+function updateBodeCalcDisplay() {
+  if (!els.bodeCalcDisplay) return;
+  const startF = parseFloat(els.bodeStartFreqInput?.value || 27000);
+  const stopF = parseFloat(els.bodeStopFreqInput?.value || 30000);
+  const stepF = parseFloat(els.bodeStepFreqInput?.value || 50);
+  const pulseMs = Math.max(15, parseInt(els.bodePulseOnInput?.value, 10) || 60);
+  const gapMs = Math.max(10, parseInt(els.bodeRestGapInput?.value, 10) || 150);
+
+  if (isNaN(startF) || isNaN(stopF) || isNaN(stepF) || stopF < startF || stepF <= 0) {
+    els.bodeCalcDisplay.textContent = 'Invalid range';
+    return;
+  }
+  const steps = Math.max(1, Math.min(5000, Math.floor((stopF - startF) / stepF + 1.0001)));
+  const totalSec = ((steps * (pulseMs + gapMs + 5)) / 1000.0).toFixed(1);
+  els.bodeCalcDisplay.textContent = `${steps} steps · ~${totalSec} s`;
+}
+
+['bodeStartFreqInput', 'bodeStopFreqInput', 'bodeStepFreqInput', 'bodePulseOnInput', 'bodeRestGapInput'].forEach(id => {
+  if (els[id]) {
+    els[id].addEventListener('input', () => {
+      if (id === 'bodeStartFreqInput' || id === 'bodeStopFreqInput') {
+        els[id].dataset.userEdited = 'true';
+      }
+      updateBodeCalcDisplay();
+    });
+  }
+});
+
+function setBodeBadge(status) {
+  if (!els.bodeStatusChip) return;
+  els.bodeStatusChip.className = 'chip';
+  switch (status) {
+    case 'running':
+      els.bodeStatusChip.classList.add('chip-primary');
+      els.bodeStatusChip.textContent = 'Sweeping…';
+      break;
+    case 'complete':
+      els.bodeStatusChip.classList.add('chip-ok');
+      els.bodeStatusChip.textContent = 'Complete';
+      break;
+    case 'aborted':
+      els.bodeStatusChip.classList.add('chip-warn');
+      els.bodeStatusChip.textContent = 'Aborted';
+      break;
+    default:
+      els.bodeStatusChip.textContent = 'Idle';
+      break;
+  }
+}
+
+function setBodeInputsDisabled(disabled) {
+  ['bodeStartFreqInput', 'bodeStopFreqInput', 'bodeStepFreqInput', 'bodePulseOnInput', 'bodeRestGapInput'].forEach(id => {
+    if (els[id]) els[id].disabled = disabled;
+  });
+}
+
+function setBodeUnit(unit) {
+  bodeState.unit = unit === 'ns' ? 'ns' : 'deg';
+  const isDeg = bodeState.unit === 'deg';
+  if (els.bodeUnitDegBtn) els.bodeUnitDegBtn.classList.toggle('active', isDeg);
+  if (els.bodeUnitNsBtn) els.bodeUnitNsBtn.classList.toggle('active', !isDeg);
+  if (els.bodeChartUnitLabel) {
+    els.bodeChartUnitLabel.textContent = isDeg ? '(° vs Hz)' : '(ns vs Hz)';
+  }
+  if (state.charts?.bode) {
+    state.charts.bode.setOption(makeBodeChartOption(bodeState.unit), true);
+    refreshBodeChartData();
+  }
+}
+
+function refreshBodeChartData() {
+  if (!state.charts?.bode) return;
+  const isDeg = bodeState.unit === 'deg';
+  const validPts = bodeState.results.filter(r => r.valid);
+  const selStep = bodeState.selectedPoint?.step ?? null;
+  const seriesData = validPts.map(r => {
+    const isSel = selStep !== null && r.step === selStep;
+    return {
+      value: [r.target, isDeg ? r.phaseDeg : r.phaseNs],
+      meta: r,
+      symbolSize: isSel ? 12 : 5,
+      itemStyle: isSel
+        ? { color: '#fbbf24', borderColor: '#ffffff', borderWidth: 2 }
+        : { color: '#c084fc' },
+    };
+  });
+  state.charts.bode.setOption({
+    series: [{ data: seriesData }],
+  });
+}
+
+function findAllLinearCrossings(points, prop, targetVal) {
+  const crossings = [];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const ya = a[prop] - targetVal;
+    const yb = b[prop] - targetVal;
+    let crossFreq = null;
+    let isRising = false;
+    if (ya === 0) {
+      crossFreq = a.target;
+      isRising = yb >= ya;
+    } else if ((ya < 0 && yb > 0) || (ya > 0 && yb < 0)) {
+      const frac = Math.abs(ya) / (Math.abs(ya) + Math.abs(yb));
+      crossFreq = a.target + frac * (b.target - a.target);
+      isRising = yb > ya;
+    }
+    if (crossFreq !== null) {
+      // Score each crossing by the peak phase excursion in the local lobe following it
+      let lobePeak = Math.abs(b[prop] - targetVal);
+      for (let j = i; j < points.length && j <= i + 40; j++) {
+        const yj = points[j][prop] - targetVal;
+        if ((isRising && yj < 0) || (!isRising && yj > 0)) break;
+        const mag = Math.abs(yj);
+        if (mag > lobePeak) lobePeak = mag;
+      }
+      crossings.push({
+        freq: crossFreq,
+        isRising,
+        lobePeak,
+        slope: Math.abs(b[prop] - a[prop]) / Math.max(1e-3, Math.abs(b.target - a.target)),
+      });
+    }
+  }
+  return crossings;
+}
+
+function findLinearCrossing(points, prop, targetVal) {
+  const crossings = findAllLinearCrossings(points, prop, targetVal);
+  if (crossings.length === 0) return null;
+  if (crossings.length === 1) return crossings[0].freq;
+  // Prefer rising crossings (inductive/capacitive -> resonant phase climb) with largest lobe peak
+  const rising = crossings.filter(c => c.isRising);
+  const pool = rising.length > 0 ? rising : crossings;
+  pool.sort((a, b) => b.lobePeak - a.lobePeak);
+  return pool[0].freq;
+}
+
+function updateBodeCrossingsSummary() {
+  const validPts = bodeState.results.filter(r => r.valid);
+  if (validPts.length < 2) {
+    if (els.bodeSummaryBar) els.bodeSummaryBar.hidden = true;
+    bodeState.zeroCrossFreqHz = null;
+    bodeState.targetCrossFreqHz = null;
+    return;
+  }
+
+  const targetPhaseNs = bodeState.overrideTargetPhaseNs !== undefined && bodeState.overrideTargetPhaseNs !== null
+    ? bodeState.overrideTargetPhaseNs
+    : (state.config?.TargetPhase ?? 0);
+  const zeroCrossings = findAllLinearCrossings(validPts, 'phaseDeg', 0);
+  const zeroCross = findLinearCrossing(validPts, 'phaseDeg', 0);
+  let targetCross = findLinearCrossing(validPts, 'phaseNs', targetPhaseNs);
+  if (targetCross === null) {
+    // Fallback to closest point to targetPhaseNs
+    let best = validPts[0];
+    let bestErr = Math.abs(best.phaseNs - targetPhaseNs);
+    for (const p of validPts) {
+      const err = Math.abs(p.phaseNs - targetPhaseNs);
+      if (err < bestErr) {
+        bestErr = err;
+        best = p;
+      }
+    }
+    targetCross = best.target;
+  }
+
+  bodeState.zeroCrossFreqHz = zeroCross;
+  bodeState.targetCrossFreqHz = targetCross;
+
+  if (els.bodeSummaryBar) els.bodeSummaryBar.hidden = false;
+  if (els.bodeZeroCrossText) {
+    if (zeroCross !== null) {
+      const risingCrossings = zeroCrossings.filter(c => c.isRising);
+      const extraText = risingCrossings.length > 1
+        ? ` (minor: ${risingCrossings.filter(c => Math.abs(c.freq - zeroCross) > 1).map(c => `${c.freq.toFixed(0)} Hz`).join(', ')})`
+        : '';
+      els.bodeZeroCrossText.textContent = `${zeroCross.toFixed(1)} Hz${extraText}`;
+    } else {
+      els.bodeZeroCrossText.textContent = 'Not crossed in range';
+    }
+  }
+  if (els.bodeTargetCrossText) {
+    els.bodeTargetCrossText.textContent = targetCross !== null
+      ? `${targetCross.toFixed(1)} Hz (Target: ${fmt(targetPhaseNs, 0)} ns)`
+      : '—';
+  }
+  if (els.bodeApplyCenterBtn) {
+    els.bodeApplyCenterBtn.hidden = targetCross === null;
+  }
+}
+
+function renderBodeTableRow(item) {
+  if (!els.bodeTableBody) return;
+  const emptyRow = els.bodeTableBody.querySelector?.('.cal-empty-row');
+  if (emptyRow && typeof emptyRow.remove === 'function') emptyRow.remove();
+
+  const tr = document.createElement('tr');
+  if (tr.dataset) tr.dataset.step = String(item.step);
+  if (typeof tr.addEventListener === 'function' && item.valid) {
+    tr.addEventListener('click', () => selectBodePoint(item));
+  }
+  const degSign = item.phaseDeg > 0 ? '+' : '';
+  const nsSign = item.phaseNs > 0 ? '+' : '';
+  const statusClass = item.valid ? 'cal-dev-good' : 'cal-dev-bad';
+  const statusText = item.valid ? 'OK' : 'NO ZCD';
+
+  tr.innerHTML = `
+    <td>${item.step}</td>
+    <td class="mono">${fmt(item.target, 2)}</td>
+    <td class="mono">${fmt(item.measured, 2)}</td>
+    <td class="mono">${item.valid ? `${degSign}${fmt(item.phaseDeg, 2)}°` : '—'}</td>
+    <td class="mono">${item.valid ? `${nsSign}${fmt(item.phaseNs, 1)} ns` : '—'}</td>
+    <td class="mono">${item.samples}</td>
+    <td class="mono ${statusClass}">${statusText}</td>
+  `;
+  els.bodeTableBody.appendChild(tr);
+  if (els.bodeTableBody.parentElement) {
+    els.bodeTableBody.parentElement.scrollTop = els.bodeTableBody.parentElement.scrollHeight;
+  }
+}
+
+async function startBodeSweep() {
+  if (bodeState.running) return;
+  if (!state.connected) {
+    log('warn', 'Cannot start Bode sweep: device not connected');
+    return;
+  }
+
+  const startFreq = parseFloat(els.bodeStartFreqInput?.value || 0);
+  const stopFreq = parseFloat(els.bodeStopFreqInput?.value || 0);
+  const stepFreq = parseFloat(els.bodeStepFreqInput?.value || 0);
+  const pulseOnMs = parseInt(els.bodePulseOnInput?.value || 60, 10);
+  const restGapMs = parseInt(els.bodeRestGapInput?.value || 150, 10);
+
+  if (isNaN(startFreq) || startFreq < 1000 || startFreq > 500000) {
+    log('error', 'Bode Sweep Error: Start frequency must be between 1000 and 500000 Hz');
+    return;
+  }
+  if (isNaN(stopFreq) || stopFreq < startFreq || stopFreq > 500000) {
+    log('error', 'Bode Sweep Error: Stop frequency must be >= Start frequency (max 500000 Hz)');
+    return;
+  }
+  if (isNaN(stepFreq) || stepFreq < 0.5) {
+    log('error', 'Bode Sweep Error: Step size must be at least 0.5 Hz');
+    return;
+  }
+  if (isNaN(pulseOnMs) || pulseOnMs < 15) {
+    log('error', 'Bode Sweep Error: Pulse ON duration must be at least 15 ms');
+    return;
+  }
+  if (isNaN(restGapMs) || restGapMs < 10) {
+    log('error', 'Bode Sweep Error: Step Rest / Gap must be at least 10 ms');
+    return;
+  }
+
+  bodeState.running = true;
+  bodeState.results = [];
+  bodeState.selectedPoint = null;
+  bodeState.pulseOnMs = pulseOnMs;
+  bodeState.restGapMs = restGapMs;
+
+  if (els.bodeTableBody) els.bodeTableBody.innerHTML = '';
+  if (els.bodeSelectedPointBar) els.bodeSelectedPointBar.hidden = true;
+  if (els.bodeProgressWrapper) els.bodeProgressWrapper.hidden = false;
+  if (els.bodeProgressFill && els.bodeProgressFill.style) els.bodeProgressFill.style.width = '0%';
+  if (els.bodeProgressText) els.bodeProgressText.textContent = 'Starting sweep…';
+  if (els.bodeLiveStats) els.bodeLiveStats.textContent = 'Freq: — | Phase: — | Samples: —';
+  if (els.bodeSummaryBar) els.bodeSummaryBar.hidden = true;
+  if (els.startBodeBtn) els.startBodeBtn.hidden = true;
+  if (els.stopBodeBtn) {
+    els.stopBodeBtn.hidden = false;
+    els.stopBodeBtn.disabled = false;
+  }
+  if (els.copyBodeImgBtn) els.copyBodeImgBtn.disabled = true;
+  if (els.downloadBodeImgBtn) els.downloadBodeImgBtn.disabled = true;
+  if (els.downloadBodeCsvBtn) els.downloadBodeCsvBtn.disabled = true;
+  if (els.clearBodeBtn) els.clearBodeBtn.disabled = true;
+  setBodeInputsDisabled(true);
+  refreshBodeChartData();
+  setBodeBadge('running');
+
+  log('info', `[Bode] Starting firmware phase response sweep: ${startFreq} → ${stopFreq} Hz (step: ${stepFreq} Hz, pulse: ${pulseOnMs} ms, gap: ${restGapMs} ms)`);
+  try {
+    await call('StartBodeSweep', startFreq, stopFreq, stepFreq, pulseOnMs, restGapMs);
+  } catch (err) {
+    bodeState.running = false;
+    setBodeInputsDisabled(false);
+    if (els.startBodeBtn) els.startBodeBtn.hidden = false;
+    if (els.stopBodeBtn) els.stopBodeBtn.hidden = true;
+    setBodeBadge('idle');
+    log('error', `[Bode] Failed to start sweep: ${err.message || err}`);
+  }
+}
+
+async function stopBodeSweep() {
+  if (!bodeState.running) return;
+  if (els.stopBodeBtn) els.stopBodeBtn.disabled = true;
+  log('warn', '[Bode] Aborting phase response sweep…');
+  await call('StopBodeSweep');
+}
+
+function onBodeSweepPoint(pt) {
+  if (!pt) return;
+  const st = pt.State ?? pt.state ?? 0;
+  const valid = (pt.Valid ?? pt.valid ?? 0) !== 0;
+  const stepIndex = pt.StepIndex ?? pt.stepIndex ?? 0;
+  const totalSteps = pt.TotalSteps ?? pt.totalSteps ?? 0;
+  const samples = pt.SampleCount ?? pt.sampleCount ?? 0;
+  const targetFreq = pt.TargetFreqHz ?? pt.targetFreqHz ?? 0;
+  const measuredFreq = pt.MeasuredFreqHz ?? pt.measuredFreqHz ?? 0;
+  const phaseNs = pt.PhaseDiffNs ?? pt.phaseDiffNs ?? 0;
+  const phaseDeg = pt.PhaseDegrees ?? pt.phaseDegrees ?? 0;
+
+  // State 2 = ABORTED frame without a new measurement sample
+  if (st === 2) {
+    bodeState.running = false;
+    setBodeInputsDisabled(false);
+    if (els.startBodeBtn) {
+      els.startBodeBtn.hidden = false;
+      els.startBodeBtn.disabled = !state.connected;
+    }
+    if (els.stopBodeBtn) els.stopBodeBtn.hidden = true;
+    const hasPts = bodeState.results.length > 0;
+    if (els.copyBodeImgBtn) els.copyBodeImgBtn.disabled = !hasPts;
+    if (els.downloadBodeImgBtn) els.downloadBodeImgBtn.disabled = !hasPts;
+    if (els.downloadBodeCsvBtn) els.downloadBodeCsvBtn.disabled = !hasPts;
+    if (els.clearBodeBtn) els.clearBodeBtn.disabled = !hasPts;
+    setBodeBadge('aborted');
+    updateBodeCrossingsSummary();
+    log('warn', `[Bode] Sweep aborted at step ${stepIndex}/${totalSteps}`);
+    return;
+  }
+
+  if (stepIndex > 0 && totalSteps > 0) {
+    const item = {
+      step: stepIndex,
+      target: targetFreq,
+      measured: measuredFreq,
+      phaseDeg: phaseDeg,
+      phaseNs: phaseNs,
+      samples: samples,
+      valid: valid,
+      pulseOnMs: bodeState.pulseOnMs,
+      restGapMs: bodeState.restGapMs,
+      timestamp: new Date().toISOString(),
+    };
+    bodeState.results.push(item);
+    renderBodeTableRow(item);
+    refreshBodeChartData();
+    updateBodeCrossingsSummary();
+
+    const pct = Math.min(100, Math.round((stepIndex / totalSteps) * 100));
+    if (els.bodeProgressWrapper) els.bodeProgressWrapper.hidden = false;
+    if (els.bodeProgressFill && els.bodeProgressFill.style) {
+      els.bodeProgressFill.style.width = `${pct}%`;
+    }
+    if (els.bodeProgressText) {
+      els.bodeProgressText.textContent = `Step ${stepIndex} of ${totalSteps} (${pct}%)`;
+    }
+    if (els.bodeLiveStats) {
+      const phaseStr = valid
+        ? `${phaseDeg >= 0 ? '+' : ''}${phaseDeg.toFixed(2)}° (${phaseNs >= 0 ? '+' : ''}${phaseNs.toFixed(1)} ns)`
+        : 'NO ZCD';
+      els.bodeLiveStats.textContent = `Freq: ${targetFreq.toFixed(1)} Hz | Phase: ${phaseStr} | Samples: ${samples}`;
+    }
+  }
+
+  if (st === 0) {
+    // Sweep completed
+    bodeState.running = false;
+    setBodeInputsDisabled(false);
+    if (els.startBodeBtn) {
+      els.startBodeBtn.hidden = false;
+      els.startBodeBtn.disabled = !state.connected;
+    }
+    if (els.stopBodeBtn) els.stopBodeBtn.hidden = true;
+    const hasPts = bodeState.results.length > 0;
+    if (els.copyBodeImgBtn) els.copyBodeImgBtn.disabled = !hasPts;
+    if (els.downloadBodeImgBtn) els.downloadBodeImgBtn.disabled = !hasPts;
+    if (els.downloadBodeCsvBtn) els.downloadBodeCsvBtn.disabled = !hasPts;
+    if (els.clearBodeBtn) els.clearBodeBtn.disabled = !hasPts;
+    setBodeBadge('complete');
+    log('ok', `[Bode] Phase response sweep completed (${bodeState.results.length} points).`);
+  }
+}
+
+function clearBodeResults() {
+  if (bodeState.running) return;
+  bodeState.results = [];
+  bodeState.selectedPoint = null;
+  bodeState.zeroCrossFreqHz = null;
+  bodeState.targetCrossFreqHz = null;
+  if (els.bodeTableBody) {
+    els.bodeTableBody.innerHTML = '<tr class="cal-empty-row"><td colspan="7">No phase response data yet. Configure parameters and click "Start Phase Sweep".</td></tr>';
+  }
+  if (els.bodeProgressWrapper) els.bodeProgressWrapper.hidden = true;
+  if (els.bodeProgressFill && els.bodeProgressFill.style) els.bodeProgressFill.style.width = '0%';
+  if (els.bodeSummaryBar) els.bodeSummaryBar.hidden = true;
+  if (els.bodeSelectedPointBar) els.bodeSelectedPointBar.hidden = true;
+  if (els.copyBodeImgBtn) els.copyBodeImgBtn.disabled = true;
+  if (els.downloadBodeImgBtn) els.downloadBodeImgBtn.disabled = true;
+  if (els.downloadBodeCsvBtn) els.downloadBodeCsvBtn.disabled = true;
+  if (els.clearBodeBtn) els.clearBodeBtn.disabled = true;
+  refreshBodeChartData();
+  setBodeBadge('idle');
+  log('info', '[Bode] Phase response results cleared');
+}
+
+async function buildBodePlotSnapshotDataUrl() {
+  const ec = state.charts?.bode;
+  if (!ec || typeof ec.getDataURL !== 'function') {
+    throw new Error('Bode chart is not available');
+  }
+  const rawDataUrl = ec.getDataURL({
+    type: 'png',
+    pixelRatio: 2,
+    backgroundColor: '#121822',
+  });
+
+  if (typeof Image === 'undefined') {
+    return rawDataUrl;
+  }
+
+  return await new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const headerHeight = 96;
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height + headerHeight;
+      const ctx = canvas.getContext?.('2d');
+      if (!ctx) {
+        resolve(rawDataUrl);
+        return;
+      }
+
+      // Fill background
+      ctx.fillStyle = '#121822';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Header title
+      const unitStr = bodeState.unit === 'deg' ? 'Degrees (°)' : 'Nanoseconds (ns)';
+      ctx.fillStyle = '#e6edf5';
+      ctx.font = 'bold 26px system-ui, -apple-system, Segoe UI, sans-serif';
+      ctx.fillText(`Bode Phase Response — REF vs ZCD (${unitStr})`, 28, 40);
+
+      // Subtitle metadata
+      const startF = els.bodeStartFreqInput?.value || '';
+      const stopF = els.bodeStopFreqInput?.value || '';
+      const stepF = els.bodeStepFreqInput?.value || '';
+      const zeroStr = bodeState.zeroCrossFreqHz !== null ? `${bodeState.zeroCrossFreqHz.toFixed(1)} Hz` : 'N/A';
+      const tgtStr = bodeState.targetCrossFreqHz !== null ? `${bodeState.targetCrossFreqHz.toFixed(1)} Hz` : 'N/A';
+      ctx.fillStyle = '#8b9bb0';
+      ctx.font = '20px ui-monospace, SFMono-Regular, Consolas, monospace';
+      ctx.fillText(
+        `Range: ${startF}–${stopF} Hz (step ${stepF} Hz) · Pulse: ${bodeState.pulseOnMs} ms · Gap: ${bodeState.restGapMs} ms · 0° Cross: ${zeroStr} · Target Cross: ${tgtStr}`,
+        28,
+        74
+      );
+
+      // Divider line
+      ctx.strokeStyle = '#223042';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(24, headerHeight - 8);
+      ctx.lineTo(canvas.width - 24, headerHeight - 8);
+      ctx.stroke();
+
+      // Draw ECharts image below header
+      ctx.drawImage(img, 0, headerHeight);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(rawDataUrl);
+    img.src = rawDataUrl;
+  });
+}
+
+function dataUrlToBlob(dataUrl) {
+  const parts = dataUrl.split(',');
+  const mimeMatch = parts[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+  const bstr = typeof atob === 'function'
+    ? atob(parts[1] || '')
+    : Buffer.from(parts[1] || '', 'base64').toString('binary');
+  const u8 = new Uint8Array(bstr.length);
+  for (let i = 0; i < bstr.length; i++) {
+    u8[i] = bstr.charCodeAt(i);
+  }
+  return new Blob([u8], { type: mime });
+}
+
+async function onCopyBodePlotImage() {
+  if (bodeState.results.length === 0) {
+    log('warn', 'No Bode plot data to copy');
+    return;
+  }
+  try {
+    const dataUrl = await buildBodePlotSnapshotDataUrl();
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      const blob = dataUrlToBlob(dataUrl);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      if (els.copyBodeImgBtn) {
+        const origText = els.copyBodeImgBtn.textContent;
+        els.copyBodeImgBtn.textContent = '✓ Copied!';
+        setTimeout(() => { if (els.copyBodeImgBtn) els.copyBodeImgBtn.textContent = origText; }, 2000);
+      }
+      log('ok', '[Bode] Plot snapshot copied to clipboard! Press Ctrl+V in your document.');
+    } else {
+      await onDownloadBodePlotImage();
+    }
+  } catch (err) {
+    log('error', `[Bode] Could not copy plot to clipboard (${err.message || err}); downloading PNG instead.`);
+    await onDownloadBodePlotImage();
+  }
+}
+
+async function onDownloadBodePlotImage() {
+  if (bodeState.results.length === 0) {
+    log('warn', 'No Bode plot data to export');
+    return;
+  }
+  try {
+    const dataUrl = await buildBodePlotSnapshotDataUrl();
+    const now = new Date();
+    const timestampStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `bode_phase_plot_${bodeState.unit}_${timestampStr}.png`;
+
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    if (document.body) {
+      document.body.appendChild(a);
+      if (typeof a.click === 'function') a.click();
+      document.body.removeChild(a);
+    }
+    log('ok', `[Bode] Plot PNG exported: ${filename}`);
+  } catch (err) {
+    log('error', `[Bode] Failed to export plot PNG: ${err.message || err}`);
+  }
+}
+
+function onDownloadBodeCsv() {
+  if (bodeState.results.length === 0) {
+    log('warn', 'No Bode sweep results to export');
+    return;
+  }
+  const now = new Date();
+  const timestampStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = `bode_phase_response_${timestampStr}.csv`;
+
+  const lines = [
+    `# DPLL Ultrasonic Phase Response (Bode Plot) Report`,
+    `# Export Date: ${now.toISOString()}`,
+    `# Generator Source: ${getGeneratorSourceName()}`,
+    `# Sweep Range: ${els.bodeStartFreqInput?.value || ''} Hz - ${els.bodeStopFreqInput?.value || ''} Hz (Step: ${els.bodeStepFreqInput?.value || ''} Hz)`,
+    `# Pulse ON Duration: ${bodeState.pulseOnMs} ms | Step Rest Gap: ${bodeState.restGapMs} ms`,
+    `# 0-Deg Resonance Crossing: ${bodeState.zeroCrossFreqHz !== null ? bodeState.zeroCrossFreqHz.toFixed(2) + ' Hz' : 'N/A'}`,
+    `# Target Phase Crossing: ${bodeState.targetCrossFreqHz !== null ? bodeState.targetCrossFreqHz.toFixed(2) + ' Hz' : 'N/A'}`,
+    `Step,Target_Frequency_Hz,Measured_Frequency_Hz,Phase_Degrees,Phase_Ns,Accepted_Samples,Valid,Pulse_On_ms,Rest_Gap_ms,Timestamp`,
+  ];
+
+  for (const r of bodeState.results) {
+    lines.push([
+      r.step,
+      r.target.toFixed(2),
+      r.measured.toFixed(2),
+      r.phaseDeg.toFixed(4),
+      r.phaseNs.toFixed(2),
+      r.samples,
+      r.valid ? 1 : 0,
+      r.pulseOnMs,
+      r.restGapMs,
+      `"${r.timestamp}"`,
+    ].join(','));
+  }
+
+  const csvContent = lines.join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  log('ok', `[Bode] Phase response CSV exported: ${filename}`);
+}
+
+if (els.startBodeBtn) els.startBodeBtn.addEventListener('click', startBodeSweep);
+if (els.stopBodeBtn) els.stopBodeBtn.addEventListener('click', stopBodeSweep);
+if (els.bodeUnitDegBtn) els.bodeUnitDegBtn.addEventListener('click', () => setBodeUnit('deg'));
+if (els.bodeUnitNsBtn) els.bodeUnitNsBtn.addEventListener('click', () => setBodeUnit('ns'));
+if (els.copyBodeImgBtn) els.copyBodeImgBtn.addEventListener('click', onCopyBodePlotImage);
+if (els.downloadBodeImgBtn) els.downloadBodeImgBtn.addEventListener('click', onDownloadBodePlotImage);
+if (els.downloadBodeCsvBtn) els.downloadBodeCsvBtn.addEventListener('click', onDownloadBodeCsv);
+if (els.clearBodeBtn) els.clearBodeBtn.addEventListener('click', clearBodeResults);
+if (els.bodeApplyCenterBtn) {
+  els.bodeApplyCenterBtn.addEventListener('click', () => {
+    if (bodeState.targetCrossFreqHz !== null && els.ddsCenterInput) {
+      const rounded = Math.round(bodeState.targetCrossFreqHz);
+      els.ddsCenterInput.value = String(rounded);
+      flashInputField(els.ddsCenterInput);
+      log('info', `[Bode] Populated DDS Center Frequency input with ${rounded} Hz — click Apply in Controller Configuration to commit.`);
+    }
+  });
+}
+
+if (els.bodeUseTargetPhaseBtn) {
+  els.bodeUseTargetPhaseBtn.addEventListener('click', () => {
+    const pt = bodeState.selectedPoint;
+    if (!pt || !els.targetInput) return;
+    const nsStr = pt.phaseNs.toFixed(1);
+    els.targetInput.value = nsStr;
+    bodeState.overrideTargetPhaseNs = parseFloat(nsStr);
+    flashInputField(els.targetInput);
+    updateBodeCrossingsSummary();
+    log('info', `[Bode] Populated Target Phase input with ${nsStr} ns (${pt.phaseDeg >= 0 ? '+' : ''}${pt.phaseDeg.toFixed(2)}° at ${pt.target.toFixed(1)} Hz) — click Apply (RAM) to commit.`);
+  });
+}
+
+if (els.bodeUseCenterFreqBtn) {
+  els.bodeUseCenterFreqBtn.addEventListener('click', () => {
+    const pt = bodeState.selectedPoint;
+    if (!pt || !els.ddsCenterInput) return;
+    const roundedFreq = Math.round(pt.target);
+    els.ddsCenterInput.value = String(roundedFreq);
+    flashInputField(els.ddsCenterInput);
+    log('info', `[Bode] Populated Center Frequency input with ${roundedFreq} Hz — click Apply (RAM) to commit.`);
+  });
+}
+
+if (els.bodeApplyPointRamBtn) {
+  els.bodeApplyPointRamBtn.addEventListener('click', async () => {
+    const pt = bodeState.selectedPoint;
+    if (!pt) return;
+    const nsStr = pt.phaseNs.toFixed(1);
+    const roundedFreq = Math.round(pt.target);
+    bodeState.overrideTargetPhaseNs = parseFloat(nsStr);
+    if (els.targetInput) {
+      els.targetInput.value = nsStr;
+      flashInputField(els.targetInput);
+    }
+    if (els.ddsCenterInput) {
+      els.ddsCenterInput.value = String(roundedFreq);
+      flashInputField(els.ddsCenterInput);
+    }
+    updateBodeCrossingsSummary();
+    if (state.connected && state.config?.ReadbackComplete === true && !state.configBusy) {
+      log('info', `[Bode] Applying selected operating point to RAM: Target Phase = ${nsStr} ns (${pt.phaseDeg.toFixed(2)}°), Center Freq = ${roundedFreq} Hz…`);
+      await onApplyConfig();
+    } else {
+      log('info', `[Bode] Set Target Phase = ${nsStr} ns & Center Freq = ${roundedFreq} Hz in form (connect & read configuration to Apply to RAM).`);
+    }
+  });
+}
+
+updateBodeCalcDisplay();
 
 // ---------------- Boot ----------------
 updateConfigControls();

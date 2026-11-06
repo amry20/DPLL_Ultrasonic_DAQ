@@ -60,6 +60,11 @@
           <div class="gauge-unit" id="phaseUnit">ns</div>
         </div>
         <div class="gauge">
+          <div class="gauge-label">Transducer Current</div>
+          <div class="gauge-value mono" id="currentValue">—</div>
+          <div class="gauge-unit" id="currentUnit">mA pk</div>
+        </div>
+        <div class="gauge">
           <div class="gauge-label">DAC Voltage</div>
           <div class="gauge-value mono" id="dacValue">—</div>
           <div class="gauge-unit" id="dacUnit">V</div>
@@ -439,12 +444,13 @@
               <th>Measured Freq (Hz)</th>
               <th>Phase (°)</th>
               <th>Phase (ns)</th>
+              <th>Current (mA)</th>
               <th>Samples</th>
               <th>Status</th>
             </tr>
           </thead>
           <tbody id="bodeTableBody">
-            <tr class="cal-empty-row"><td colspan="7">No phase response data yet. Configure parameters and click "Start Phase Sweep".</td></tr>
+            <tr class="cal-empty-row"><td colspan="8">No phase response data yet. Configure parameters and click "Start Phase Sweep".</td></tr>
           </tbody>
         </table>
       </div>

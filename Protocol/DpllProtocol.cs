@@ -72,6 +72,8 @@ public static class Opcode
     public const ushort START_BODE_SWEEP = 0x0043;
     public const ushort STOP_BODE_SWEEP = 0x0044;
     public const ushort BODE_SWEEP_POINT = 0x0045;
+    public const ushort SET_PHASE_SOURCE = 0x0046;
+    public const ushort GET_PHASE_SOURCE = 0x0047;
 }
 
 /// <summary>
@@ -202,20 +204,24 @@ public static class DpllProtocol
     }
 
     /// <summary>
-    /// Decode the 16-byte <c>dpllStatusData</c> payload of an OPCODE_STREAM_DPLL_STATUS packet.
-    /// Layout (packed, little-endian floats): freq Hz, phase ns, DAC V, lock byte, stale byte, pad[2].
+    /// Decode the 16 or 20-byte <c>dpllStatusData</c> payload of an OPCODE_STREAM_DPLL_STATUS packet.
+    /// Layout (packed, little-endian floats): freq Hz, phase ns, DAC V, (optional CurrentMagnitude mA), lock byte, stale byte, pad[2].
     /// </summary>
     public static DpllTelemetry DecodeStatusPayload(ReadOnlySpan<byte> payload, DateTimeOffset timestamp)
     {
+        bool hasCurrentMag = payload.Length >= 20;
+        int statusOffset = hasCurrentMag ? 16 : 12;
+
         var t = new DpllTelemetry
         {
             ReferenceFrequencyHz = ReadFloatLe(payload, 0),
             PhaseErrorNs = ReadFloatLe(payload, 4),
             DACVoltage_V = ReadFloatLe(payload, 8),
-            LockStatus = payload.Length > 12 ? payload[12] : 0,
-            PhaseStale = payload.Length > 13 ? payload[13] : 0,
-            EepromStatus = payload.Length > 14 ? payload[14] : 0,
-            DdsStatus = payload.Length > 15 ? payload[15] : 0,
+            CurrentMagnitude_mA = hasCurrentMag ? ReadFloatLe(payload, 12) : 0.0,
+            LockStatus = payload.Length > statusOffset ? payload[statusOffset] : 0,
+            PhaseStale = payload.Length > statusOffset + 1 ? payload[statusOffset + 1] : 0,
+            EepromStatus = payload.Length > statusOffset + 2 ? payload[statusOffset + 2] : 0,
+            DdsStatus = payload.Length > statusOffset + 3 ? payload[statusOffset + 3] : 0,
             Timestamp = timestamp.ToUnixTimeSeconds() + timestamp.Millisecond / 1000.0
         };
         return t;
@@ -296,7 +302,7 @@ public static class DpllProtocol
         return bytes;
     }
 
-    /// <summary>Decode the 24-byte BodeSweepPointPacket from firmware.</summary>
+    /// <summary>Decode the 24 or 28-byte BodeSweepPointPacket from firmware.</summary>
     public static BodeSweepPoint DecodeBodeSweepPoint(ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 24)
@@ -314,7 +320,8 @@ public static class DpllProtocol
             TargetFreqHz = ReadFloatLe(payload, 8),
             MeasuredFreqHz = ReadFloatLe(payload, 12),
             PhaseDiffNs = ReadFloatLe(payload, 16),
-            PhaseDegrees = ReadFloatLe(payload, 20)
+            PhaseDegrees = ReadFloatLe(payload, 20),
+            CurrentMagnitude_mA = payload.Length >= 28 ? ReadFloatLe(payload, 24) : 0f
         };
     }
 }

@@ -15,6 +15,9 @@ public sealed class DpllTelemetry
     /// <summary>Current DAC output voltage in volts (0.0 – 3.3).</summary>
     public double DACVoltage_V { get; set; }
 
+    /// <summary>Transducer peak current amplitude in milliamperes (mA) calculated by Goertzel DFT.</summary>
+    public double CurrentMagnitude_mA { get; set; }
+
     /// <summary>Controller state: 0=NO_REF, 1=WAIT_ZCD, 2=TRACK, 3=LOCK, 4=MANUAL.</summary>
     public int LockStatus { get; set; }
 

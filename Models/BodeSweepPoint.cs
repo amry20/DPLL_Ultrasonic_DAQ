@@ -32,5 +32,8 @@ public sealed class BodeSweepPoint
 
     /// <summary>Measured phase difference (REF vs ZCD) in degrees (-180..+180)</summary>
     public float PhaseDegrees { get; set; }
+
+    /// <summary>Measured transducer peak current amplitude in milliamperes (mA)</summary>
+    public float CurrentMagnitude_mA { get; set; }
 }
 

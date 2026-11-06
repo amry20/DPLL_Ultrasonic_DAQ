@@ -57,6 +57,7 @@ const els = {
   lockStateText: $('lockStateText'),
   freqValue: $('freqValue'),
   phaseValue: $('phaseValue'),
+  currentValue: $('currentValue'),
   dacValue: $('dacValue'),
   loopValue: $('loopValue'),
   staleFlag: $('staleFlag'),
@@ -442,6 +443,7 @@ function setUiConnected(connected) {
     els.configReadbackStatus.textContent = 'Connect and read configuration before applying settings.';
     els.freqValue.textContent = '—';
     els.phaseValue.textContent = '—';
+    if (els.currentValue) els.currentValue.textContent = '—';
     els.dacValue.textContent = '—';
     els.loopValue.textContent = '—';
     setLockBadge('error', 'OFFLINE');
@@ -457,6 +459,11 @@ function setUiConnected(connected) {
 function updateStatus(t) {
   els.freqValue.textContent = fmt(t.ReferenceFrequencyHz, 2);
   els.phaseValue.textContent = fmt(t.PhaseErrorNs, 1);
+  if (els.currentValue) {
+    els.currentValue.textContent = t.CurrentMagnitude_mA !== undefined && t.CurrentMagnitude_mA !== null
+      ? fmt(t.CurrentMagnitude_mA, 1)
+      : '—';
+  }
   els.dacValue.textContent = fmt(t.DACVoltage_V, 3);
   els.loopValue.textContent = state.config ? state.config.LoopPeriodMs : '—';
 
@@ -1555,7 +1562,12 @@ function makeBodeChartOption(unit) {
   return {
     animation: false,
     backgroundColor: 'transparent',
-    grid: { top: 18, right: 20, bottom: 38, left: 64 },
+    grid: { top: 28, right: 64, bottom: 38, left: 64 },
+    legend: {
+      data: [yLabel, 'Current (mA)'],
+      textStyle: { color: '#8b9bb0', fontSize: 11 },
+      top: 2,
+    },
     xAxis: {
       type: 'value',
       scale: true,
@@ -1568,22 +1580,37 @@ function makeBodeChartOption(unit) {
       axisLabel: { color: '#8b9bb0', fontSize: 11, formatter: v => Number(v).toFixed(0) },
       splitLine: { lineStyle: { color: '#223042', type: 'dashed' } },
     },
-    yAxis: {
-      type: 'value',
-      scale: true,
-      name: yLabel,
-      nameLocation: 'middle',
-      nameGap: 46,
-      nameTextStyle: { color: '#8b9bb0', fontSize: 11 },
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: { color: '#8b9bb0', fontSize: 11, formatter: v => Number(v).toFixed(decimals) },
-      splitLine: { lineStyle: { color: '#223042', type: 'dashed' } },
-    },
+    yAxis: [
+      {
+        type: 'value',
+        scale: true,
+        name: yLabel,
+        nameLocation: 'middle',
+        nameGap: 46,
+        nameTextStyle: { color: '#c084fc', fontSize: 11 },
+        axisLine: { lineStyle: { color: '#a855f7' } },
+        axisTick: { show: false },
+        axisLabel: { color: '#c084fc', fontSize: 11, formatter: v => Number(v).toFixed(decimals) },
+        splitLine: { lineStyle: { color: '#223042', type: 'dashed' } },
+      },
+      {
+        type: 'value',
+        scale: true,
+        name: 'Current (mA pk)',
+        nameLocation: 'middle',
+        nameGap: 46,
+        nameTextStyle: { color: '#38bdf8', fontSize: 11 },
+        axisLine: { lineStyle: { color: '#38bdf8' } },
+        axisTick: { show: false },
+        axisLabel: { color: '#38bdf8', fontSize: 11, formatter: v => Number(v).toFixed(0) },
+        splitLine: { show: false },
+      },
+    ],
     series: [
       {
         name: yLabel,
         type: 'line',
+        yAxisIndex: 0,
         data: [],
         symbol: 'circle',
         symbolSize: 5,
@@ -1599,6 +1626,16 @@ function makeBodeChartOption(unit) {
           },
         },
       },
+      {
+        name: 'Current (mA)',
+        type: 'line',
+        yAxisIndex: 1,
+        data: [],
+        symbol: 'diamond',
+        symbolSize: 4,
+        lineStyle: { color: '#38bdf8', width: 1.8, type: 'solid' },
+        itemStyle: { color: '#38bdf8' },
+      },
     ],
     tooltip: {
       trigger: 'axis',
@@ -1610,11 +1647,13 @@ function makeBodeChartOption(unit) {
         const d = params[0].data;
         const pt = d.meta;
         if (!pt) return `${Number(d.value[0]).toFixed(1)} Hz: <b>${Number(d.value[1]).toFixed(decimals)}</b>`;
+        const currentStr = pt.currentMa > 0 ? `Current: <b>${pt.currentMa.toFixed(1)} mA pk</b><br/>` : '';
         return [
           `Step #${pt.step} · <b>${pt.target.toFixed(1)} Hz</b> (Meas: ${pt.measured.toFixed(2)} Hz)`,
           `Phase (°): <b>${pt.phaseDeg >= 0 ? '+' : ''}${pt.phaseDeg.toFixed(2)}°</b>`,
           `Phase (ns): <b>${pt.phaseNs >= 0 ? '+' : ''}${pt.phaseNs.toFixed(1)} ns</b>`,
-          `Samples: <b>${pt.samples}</b> (${pt.valid ? 'Valid ZCD' : 'No ZCD'})`,
+          currentStr +
+          `Samples: <b>${pt.samples}</b> (${pt.valid ? 'Valid Signal' : 'No Signal'})`,
           `<span style="color:#fbbf24;font-size:11px;">Click point to select as Target Phase / Center Freq</span>`,
         ].join('<br/>');
       },
@@ -1697,7 +1736,8 @@ function refreshBodeChartData() {
   const isDeg = bodeState.unit === 'deg';
   const validPts = bodeState.results.filter(r => r.valid);
   const selStep = bodeState.selectedPoint?.step ?? null;
-  const seriesData = validPts.map(r => {
+
+  const phaseSeriesData = validPts.map(r => {
     const isSel = selStep !== null && r.step === selStep;
     return {
       value: [r.target, isDeg ? r.phaseDeg : r.phaseNs],
@@ -1708,8 +1748,17 @@ function refreshBodeChartData() {
         : { color: '#c084fc' },
     };
   });
+
+  const currentSeriesData = validPts.map(r => ({
+    value: [r.target, r.currentMa || 0],
+    meta: r,
+  }));
+
   state.charts.bode.setOption({
-    series: [{ data: seriesData }],
+    series: [
+      { data: phaseSeriesData },
+      { data: currentSeriesData },
+    ],
   });
 }
 
@@ -1828,7 +1877,7 @@ function renderBodeTableRow(item) {
   const degSign = item.phaseDeg > 0 ? '+' : '';
   const nsSign = item.phaseNs > 0 ? '+' : '';
   const statusClass = item.valid ? 'cal-dev-good' : 'cal-dev-bad';
-  const statusText = item.valid ? 'OK' : 'NO ZCD';
+  const statusText = item.valid ? 'OK' : 'NO SIGNAL';
 
   tr.innerHTML = `
     <td>${item.step}</td>
@@ -1836,6 +1885,7 @@ function renderBodeTableRow(item) {
     <td class="mono">${fmt(item.measured, 2)}</td>
     <td class="mono">${item.valid ? `${degSign}${fmt(item.phaseDeg, 2)}°` : '—'}</td>
     <td class="mono">${item.valid ? `${nsSign}${fmt(item.phaseNs, 1)} ns` : '—'}</td>
+    <td class="mono">${item.currentMa > 0 ? fmt(item.currentMa, 1) : '—'}</td>
     <td class="mono">${item.samples}</td>
     <td class="mono ${statusClass}">${statusText}</td>
   `;
@@ -1936,6 +1986,7 @@ function onBodeSweepPoint(pt) {
   const measuredFreq = pt.MeasuredFreqHz ?? pt.measuredFreqHz ?? 0;
   const phaseNs = pt.PhaseDiffNs ?? pt.phaseDiffNs ?? 0;
   const phaseDeg = pt.PhaseDegrees ?? pt.phaseDegrees ?? 0;
+  const currentMa = pt.CurrentMagnitude_mA ?? pt.currentMagnitude_mA ?? 0;
 
   // State 2 = ABORTED frame without a new measurement sample
   if (st === 2) {
@@ -1964,6 +2015,7 @@ function onBodeSweepPoint(pt) {
       measured: measuredFreq,
       phaseDeg: phaseDeg,
       phaseNs: phaseNs,
+      currentMa: currentMa,
       samples: samples,
       valid: valid,
       pulseOnMs: bodeState.pulseOnMs,
@@ -1986,8 +2038,9 @@ function onBodeSweepPoint(pt) {
     if (els.bodeLiveStats) {
       const phaseStr = valid
         ? `${phaseDeg >= 0 ? '+' : ''}${phaseDeg.toFixed(2)}° (${phaseNs >= 0 ? '+' : ''}${phaseNs.toFixed(1)} ns)`
-        : 'NO ZCD';
-      els.bodeLiveStats.textContent = `Freq: ${targetFreq.toFixed(1)} Hz | Phase: ${phaseStr} | Samples: ${samples}`;
+        : 'NO SIGNAL';
+      const curStr = currentMa > 0 ? ` | Current: ${currentMa.toFixed(1)} mA` : '';
+      els.bodeLiveStats.textContent = `Freq: ${targetFreq.toFixed(1)} Hz | Phase: ${phaseStr}${curStr} | Samples: ${samples}`;
     }
   }
 

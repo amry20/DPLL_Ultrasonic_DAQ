@@ -74,6 +74,10 @@ public static class Opcode
     public const ushort BODE_SWEEP_POINT = 0x0045;
     public const ushort SET_PHASE_SOURCE = 0x0046;
     public const ushort GET_PHASE_SOURCE = 0x0047;
+    public const ushort TRIGGER_ADC_SNAPSHOT = 0x0048;
+    public const ushort ADC_SNAPSHOT_DATA = 0x0049;
+    public const ushort SET_GOERTZEL_BURDEN = 0x004A;
+    public const ushort GET_GOERTZEL_BURDEN = 0x004B;
 }
 
 /// <summary>
@@ -322,6 +326,73 @@ public static class DpllProtocol
             PhaseDiffNs = ReadFloatLe(payload, 16),
             PhaseDegrees = ReadFloatLe(payload, 20),
             CurrentMagnitude_mA = payload.Length >= 28 ? ReadFloatLe(payload, 24) : 0f
+        };
+    }
+
+    /// <summary>Builds an 8-byte command frame to request a raw ADC waveform snapshot.</summary>
+    public static byte[] BuildTriggerAdcSnapshotCommand() =>
+        BuildPacket(Opcode.TRIGGER_ADC_SNAPSHOT, 0, default);
+
+    /// <summary>Decodes an ADC waveform snapshot packet (channel, sample rate, counts, and calculated voltages).</summary>
+    public static AdcSnapshot DecodeAdcSnapshot(ReadOnlySpan<byte> payload, DateTimeOffset? timestamp = null)
+    {
+        if (payload.Length < 20)
+        {
+            return new AdcSnapshot { Timestamp = timestamp ?? DateTimeOffset.UtcNow };
+        }
+
+        byte channel = payload[0];
+        ushort count = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(2, 2));
+        uint sampleRate = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(4, 4));
+        float driveFreq = ReadFloatLe(payload, 8);
+        float vRef = ReadFloatLe(payload, 12);
+        float atten = ReadFloatLe(payload, 16);
+
+        int availableSamples = (payload.Length - 20) / 2;
+        int n = Math.Min((int)count, availableSamples);
+
+        var raw = new ushort[n];
+        var volts = new float[n];
+        var timeUs = new float[n];
+
+        float vMin = float.MaxValue;
+        float vMax = float.MinValue;
+        double sum = 0;
+        float dtUs = 1000000.0f / (sampleRate > 0 ? sampleRate : 750000);
+
+        for (int i = 0; i < n; i++)
+        {
+            ushort c = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(20 + i * 2, 2));
+            raw[i] = c;
+            float v = c * (3.3f / 4095.0f);
+            volts[i] = v;
+            timeUs[i] = i * dtUs;
+            if (v < vMin) vMin = v;
+            if (v > vMax) vMax = v;
+            sum += v;
+        }
+
+        float vMid = n > 0 ? (float)(sum / n) : vRef;
+        float vPeak = n > 0 ? (vMax - vMin) * 0.5f : 0f;
+        float vBurdenPk = (atten > 0.001f) ? (vPeak / atten) : vPeak;
+
+        return new AdcSnapshot
+        {
+            Channel = channel,
+            SampleCount = (ushort)n,
+            SampleRateHz = sampleRate,
+            DriveFreqHz = driveFreq,
+            VRefVolts = vRef,
+            FrontEndAtten = atten,
+            RawSamples = raw,
+            VoltageVolts = volts,
+            TimeUs = timeUs,
+            VPeak = vPeak,
+            VMid = vMid,
+            VMin = n > 0 ? vMin : 0f,
+            VMax = n > 0 ? vMax : 0f,
+            VBurdenPk = vBurdenPk,
+            Timestamp = timestamp ?? DateTimeOffset.UtcNow
         };
     }
 }

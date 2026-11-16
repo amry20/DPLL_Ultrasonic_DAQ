@@ -70,6 +70,10 @@ app.Lifetime.ApplicationStarted.Register(() =>
     device.BodeSweepPointReceived += point =>
         hubContext.Clients.All.SendAsync("BodeSweepPoint", point);
 
+    // Broadcast ADC waveform snapshot frames.
+    device.AdcSnapshotReceived += snapshot =>
+        hubContext.Clients.All.SendAsync("AdcSnapshot", snapshot);
+
     try
     {
         device.Start();

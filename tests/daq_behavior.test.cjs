@@ -417,3 +417,23 @@ test('bode phase response sweep invokes StartBodeSweep, plots points in deg/ns, 
   f.element('bodeUseCenterFreqBtn').listeners.click();
   assert.equal(f.element('ddsCenterInput').value, '28200');
 });
+
+test('ADC waveform snapshot updates UI metrics and triggers hub request', async () => {
+  const f = fixture();
+  f.element('scopeCaptureBtn').listeners.click();
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].method, 'TriggerAdcSnapshot');
+
+  // Simulate incoming Channel 0 (PC4 Current) snapshot frame
+  f.run('onAdcSnapshot({ channel: 0, sampleCount: 4, sampleRateHz: 750000, driveFreqHz: 33500, vRefVolts: 1.65, frontEndAtten: 0.3333, vPeak: 1.25, vMid: 1.65, vMin: 0.40, vMax: 2.90, vBurdenPk: 3.75, timeUs: [0, 1.33, 2.67, 4.0], voltageVolts: [1.65, 2.90, 1.65, 0.40] })');
+
+  assert.match(f.element('scopeVpkText').textContent, /1\.25 V \(2\.50 Vpp\)/);
+  assert.match(f.element('scopeVmidText').textContent, /1\.65 V/);
+  assert.match(f.element('scopeVburdenText').textContent, /3\.75 V pk/);
+  assert.match(f.element('scopeFreqText').textContent, /33500 Hz/);
+  assert.equal(f.element('scopeClipBadge').style.display, 'none');
+
+  // Simulate clipping frame
+  f.run('onAdcSnapshot({ channel: 0, sampleCount: 4, sampleRateHz: 750000, driveFreqHz: 33500, vRefVolts: 1.65, frontEndAtten: 0.3333, vPeak: 1.65, vMid: 1.65, vMin: 0.01, vMax: 3.29, vBurdenPk: 4.95, timeUs: [0, 1.33, 2.67, 4.0], voltageVolts: [1.65, 3.29, 1.65, 0.01] })');
+  assert.equal(f.element('scopeClipBadge').style.display, 'inline-block');
+});

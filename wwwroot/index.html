@@ -136,6 +136,15 @@
           <small id="sourceChangeHint" class="hint">Gain values belong to the active generator source.</small>
         </div>
         <div class="field field-wide">
+          <label for="phaseSourceInput">Phase Measurement Source</label>
+          <select id="phaseSourceInput" disabled>
+            <option value="">Unknown / unsupported</option>
+            <option value="0">ZCD Input Capture (PA0 REF / PA1 ZCD)</option>
+            <option value="1">Goertzel Dual ADC (PC4 current / PA7 drive ref)</option>
+          </select>
+          <small class="hint">Choose, then press Apply (RAM). Use Save to EEPROM only if firmware persists it.</small>
+        </div>
+        <div class="field field-wide">
           <label for="trackingDirectionInput">Tracking direction</label>
           <select id="trackingDirectionInput" disabled>
             <option value="">Unknown / unsupported</option>
@@ -240,6 +249,37 @@
             <option value="2">Zero</option>
           </select>
         </div>
+        <div class="field">
+          <label for="burdenResistanceInput">CT R<sub>burden</sub> <span class="unit">(Ω)</span></label>
+          <input id="burdenResistanceInput" type="number" step="0.1" min="0.1" max="1000000" placeholder="50.0" disabled />
+        </div>
+        <div class="field">
+          <label for="burdenCapacitanceInput">CT C<sub>burden</sub> <span class="unit">(nF)</span></label>
+          <input id="burdenCapacitanceInput" type="number" step="0.1" min="0" max="1000000" placeholder="6.8" disabled />
+        </div>
+        <div class="field">
+          <label for="ctInductanceInput">CT L<sub>sec</sub> <span class="unit">(mH)</span></label>
+          <input id="ctInductanceInput" type="number" step="0.1" min="0.001" max="100000" placeholder="24.0" disabled />
+        </div>
+        <div class="field">
+          <label for="ctTurnsInput">CT Turns <span class="unit">(1:N)</span></label>
+          <input id="ctTurnsInput" type="number" step="1" min="0.1" max="100000" placeholder="100" disabled />
+        </div>
+        <div class="field">
+          <label for="frontEndAttenInput">PC4 Divider Atten</label>
+          <input id="frontEndAttenInput" type="number" step="0.0001" min="0.001" max="1" placeholder="0.3333" disabled />
+        </div>
+        <div class="field">
+          <label for="goertzelPhaseOffsetInput">Goertzel Phase Offset <span class="unit">(°)</span></label>
+          <input id="goertzelPhaseOffsetInput" type="number" step="0.5" min="-360" max="360" placeholder="180.0" disabled title="Fixed phase offset in degrees (e.g. 180 if CT polarity is inverted)" />
+        </div>
+        <div class="field">
+          <label for="burdenCompEnabledInput">Burden Reactive Comp</label>
+          <select id="burdenCompEnabledInput" disabled title="Optional reactive CT burden phase/current compensation (C_burden || L_sec). Disabled by default.">
+            <option value="0">Disabled (Default)</option>
+            <option value="1">Enabled (R||C||L)</option>
+          </select>
+        </div>
       </div>
 
       <div class="control-actions">
@@ -342,6 +382,37 @@
         <div class="sonic-progress-bar">
           <div class="sonic-progress-fill" id="sonicProgressFill" style="width: 0%;"></div>
         </div>
+      </div>
+    </section>
+
+    <!-- ======================= ADC Waveform Oscilloscope ======================= -->
+    <section class="panel scope-panel" id="scopePanel">
+      <div class="panel-head">
+        <h2>ADC Waveform Snapshot <span class="chip chip-dim" style="font-size: 11px; margin-left: 8px;">PC4 CT Out &amp; PA7 Drive Ref</span></h2>
+        <div class="scope-controls">
+          <button id="scopeCaptureBtn" type="button" class="btn btn-primary">⚡ Capture Waveform</button>
+          <label class="scope-auto-label">
+            <input id="scopeContinuousCheck" type="checkbox" /> Live (2 Hz)
+          </label>
+          <button id="scopeDownloadImgBtn" type="button" class="btn btn-ghost" disabled title="Download high-resolution PNG image of the waveform snapshot">🖼️ Save PNG</button>
+          <button id="scopeDownloadCsvBtn" type="button" class="btn btn-success" disabled title="Download raw ADC counts and voltage samples as CSV">💾 Download CSV</button>
+        </div>
+      </div>
+      <p class="scope-help">
+        Synchronous 750 kSPS dual-channel ADC snapshot. Displays the transducer current waveform captured at <strong>PC4</strong> (CT burden) centered at VREF (1.65 V) alongside the drive reference from <strong>PA7</strong>.
+      </p>
+
+      <div class="scope-metrics-bar">
+        <span class="chip">PC4 Peak: <strong id="scopeVpkText" class="mono" style="margin-left: 4px;">—</strong></span>
+        <span class="chip">PC4 Offset (Vmid): <strong id="scopeVmidText" class="mono" style="margin-left: 4px;">—</strong></span>
+        <span class="chip">CT Burden Vpk: <strong id="scopeVburdenText" class="mono" style="margin-left: 4px;">—</strong></span>
+        <span class="chip">Drive Freq: <strong id="scopeFreqText" class="mono" style="margin-left: 4px;">—</strong></span>
+        <span class="chip">Sample Rate: <strong class="mono" style="margin-left: 4px;">750 kSPS (1.33 µs/pt)</strong></span>
+        <span class="chip scope-clip-badge" id="scopeClipBadge" style="display: none;">⚠️ CLIPPING DETECTED</span>
+      </div>
+
+      <div class="chart-box scope-chart-box">
+        <div id="scopeChart" class="echart-canvas"></div>
       </div>
     </section>
 

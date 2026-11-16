@@ -305,6 +305,7 @@ select option {
   .status-panel,
   .charts-panel,
   .sonic-panel,
+  .scope-panel,
   .bode-panel,
   .cal-panel {
     grid-column: 1 / -1;
@@ -1149,6 +1150,70 @@ select option {
 @keyframes sonicContinuousPulse {
   0% { background-position: 0% 0%; }
   100% { background-position: 200% 0%; }
+}
+
+/* ADC Waveform Snapshot Panel */
+.scope-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.scope-help {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.scope-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.scope-auto-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.scope-auto-label input {
+  cursor: pointer;
+}
+
+.scope-metrics-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 12px;
+}
+
+.scope-clip-badge {
+  background: #dc2626;
+  color: #ffffff;
+  font-weight: 700;
+  border-color: #ef4444;
+}
+
+.scope-chart-box {
+  width: 100%;
+  padding: 12px 14px;
+}
+
+.scope-chart-box .echart-canvas {
+  height: 340px;
+  width: 100%;
 }
 
 /* Phase Response & Bode Plot Panel */

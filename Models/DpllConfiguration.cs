@@ -21,6 +21,30 @@ public sealed class DpllConfiguration
     /// <summary>0=normal, 1=inverted; null when GET is unsupported or unanswered.</summary>
     public int? TrackingDirection { get; set; }
 
+    /// <summary>Phase measurement source: 0=ZCD input capture (PA0/PA1), 1=Goertzel dual ADC (PC4/PA7); null when unsupported.</summary>
+    public int? PhaseSource { get; set; }
+
+    /// <summary>CT burden resistance in Ohms (default 50.0); null when unsupported.</summary>
+    public double? BurdenResistanceOhms { get; set; }
+
+    /// <summary>CT burden parallel capacitance in nF (default 6.8 nF); null when unsupported.</summary>
+    public double? BurdenCapacitanceNf { get; set; }
+
+    /// <summary>CT secondary magnetizing inductance in mH (default 24.0 mH); null when unsupported.</summary>
+    public double? CtSecondaryInductanceMh { get; set; }
+
+    /// <summary>CT turns ratio 1:N (default 100.0); null when unsupported.</summary>
+    public double? CtTurnsRatio { get; set; }
+
+    /// <summary>Front-end voltage divider attenuation ratio (e.g. 0.333333 for 10k/(20k+10k)); null when unsupported.</summary>
+    public double? FrontEndAttenuation { get; set; }
+
+    /// <summary>Fixed Goertzel phase offset in degrees (-360..360, e.g. 180.0 for inverted CT polarity); null when unsupported.</summary>
+    public double? GoertzelPhaseOffsetDeg { get; set; }
+
+    /// <summary>Reactive CT burden compensation (C_burden || L_sec): 0=disabled (default), 1=enabled; null when unsupported.</summary>
+    public int? BurdenCompEnabled { get; set; }
+
     /// <summary>Proportional gain, V/ns (DAC) or Hz/ns (DDS).</summary>
     public double Kp { get; set; }
 

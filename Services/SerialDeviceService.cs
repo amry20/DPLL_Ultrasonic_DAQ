@@ -82,6 +82,8 @@ public sealed class SerialDeviceService : IDisposable
     public event Action<SonicationStatus>? SonicationStatusReceived;
     public SonicationStatus? LastSonicationStatus { get; private set; }
     public event Action<BodeSweepPoint>? BodeSweepPointReceived;
+    public event Action<AdcSnapshot>? AdcSnapshotReceived;
+    public AdcSnapshot? LatestAdcSnapshot { get; private set; }
 
     public SerialDeviceService(IOptionsMonitor<SerialOptions> optionsMonitor, ILogger<SerialDeviceService> logger)
     {
@@ -387,7 +389,7 @@ public sealed class SerialDeviceService : IDisposable
 
     private async Task ReadLoopAsync(SerialPort port, CancellationToken token)
     {
-        byte[] chunk = new byte[512];
+        byte[] chunk = new byte[2048];
         try
         {
             while (!token.IsCancellationRequested && port.IsOpen)
@@ -404,18 +406,18 @@ public sealed class SerialDeviceService : IDisposable
                 for (int i = 0; i < n; i++)
                 {
                     _rxBuffer.Add(chunk[i]);
-
-                    // Safety bound: if we never form a valid frame, drop the
-                    // buffer so it cannot grow without limit.
-                    if (_rxBuffer.Count > DpllProtocol.MaxPacketSize)
-                    {
-                        _logger.LogWarning("Binary buffer overflowed ({Count} bytes) — dropping as invalid frame", _rxBuffer.Count);
-                        _rxBuffer.Clear();
-                    }
                 }
 
-                // Parse any complete packets now available.
+                // Parse any complete packets now available (several large
+                // snapshot frames may be queued back-to-back).
                 TryParsePackets();
+
+                // Safety bound AFTER parsing: only garbage can remain this large.
+                if (_rxBuffer.Count > DpllProtocol.MaxPacketSize * 4)
+                {
+                    _logger.LogWarning("Binary buffer overflowed ({Count} bytes) — dropping as invalid data", _rxBuffer.Count);
+                    _rxBuffer.Clear();
+                }
             }
         }
         catch (OperationCanceledException)
@@ -582,6 +584,36 @@ public sealed class SerialDeviceService : IDisposable
                     SetConfigValue(c => c.TrackingDirection = direction);
                     break;
                 }
+                case Opcode.GET_PHASE_SOURCE:
+                {
+                    int ps = payload[0];
+                    SetConfigValue(c => c.PhaseSource = ps);
+                    break;
+                }
+                case Opcode.GET_GOERTZEL_BURDEN:
+                {
+                    if (payload.Length >= 20)
+                    {
+                        float rB    = ReadFloat(payload.Slice(0, 4));
+                        float cB    = ReadFloat(payload.Slice(4, 4));
+                        float lS    = ReadFloat(payload.Slice(8, 4));
+                        float ctN   = ReadFloat(payload.Slice(12, 4));
+                        float atten = ReadFloat(payload.Slice(16, 4));
+                        float pOff  = payload.Length >= 24 ? ReadFloat(payload.Slice(20, 4)) : 180f;
+                        int   compEn = payload.Length >= 25 ? (payload[24] != 0 ? 1 : 0) : 0;
+                        SetConfigValue(c =>
+                        {
+                            c.BurdenResistanceOhms    = rB;
+                            c.BurdenCapacitanceNf     = cB * 1e9;
+                            c.CtSecondaryInductanceMh = lS * 1e3;
+                            c.CtTurnsRatio            = ctN;
+                            c.FrontEndAttenuation     = atten;
+                            c.GoertzelPhaseOffsetDeg  = pOff;
+                            c.BurdenCompEnabled       = compEn;
+                        });
+                    }
+                    break;
+                }
                 case Opcode.GET_VOLTAGE:
                     // Not part of the config snapshot (telemetry covers DAC V).
                     break;
@@ -651,6 +683,15 @@ public sealed class SerialDeviceService : IDisposable
                     break;
                 }
 
+                case Opcode.ADC_SNAPSHOT_DATA:
+                {
+                    var snapshot = DpllProtocol.DecodeAdcSnapshot(payload);
+                    LatestAdcSnapshot = snapshot;
+                    try { AdcSnapshotReceived?.Invoke(snapshot); }
+                    catch (Exception ex) { _logger.LogError(ex, "AdcSnapshotReceived handler threw."); }
+                    break;
+                }
+
                 default:
                     _logger.LogInformation("RX binary opcode 0x{Opcode:X4} ({Len} payload bytes)", opcode, payload.Length);
                     break;
@@ -692,6 +733,8 @@ public sealed class SerialDeviceService : IDisposable
         Opcode.GET_VERSION => payload.Length > 0,
         Opcode.GET_CAPTURE_EDGE => payload.Length == 2 && payload[0] <= 2 && payload[1] <= 2,
         Opcode.GET_TRACKING_DIR => payload.Length == 1 && payload[0] <= 1,
+        Opcode.GET_PHASE_SOURCE => payload.Length == 1 && payload[0] <= 1,
+        Opcode.GET_GOERTZEL_BURDEN => payload.Length is 20 or 24,
         Opcode.GET_GENERATOR_SOURCE => payload.Length == 1 && payload[0] <= 2,
         Opcode.GET_DDS_MCO_CLOCK => payload.Length == 1 && payload[0] <= 6,
         Opcode.GET_SIGNAL_LOSS_BEHAVIOR => payload.Length == 1 && payload[0] <= 2,
@@ -706,7 +749,7 @@ public sealed class SerialDeviceService : IDisposable
 
     private static bool IsConfigGet(ushort opcode) =>
         Array.IndexOf(ConfigGetOpcodeOrder, opcode) >= 0 ||
-        opcode is Opcode.GET_CAPTURE_EDGE or Opcode.GET_TRACKING_DIR;
+        opcode is Opcode.GET_CAPTURE_EDGE or Opcode.GET_TRACKING_DIR or Opcode.GET_PHASE_SOURCE or Opcode.GET_GOERTZEL_BURDEN;
 
     private bool HasPendingGet(ushort opcode)
     {
@@ -933,6 +976,19 @@ public sealed class SerialDeviceService : IDisposable
         }
         bool directionRead = await RequestGetAsync(Opcode.GET_TRACKING_DIR, optional: true).ConfigureAwait(false);
         if (_config is not null && !directionRead) _config.TrackingDirection = null;
+        bool phaseSrcRead = await RequestGetAsync(Opcode.GET_PHASE_SOURCE, optional: true).ConfigureAwait(false);
+        if (_config is not null && !phaseSrcRead) _config.PhaseSource = null;
+        bool burdenRead = await RequestGetAsync(Opcode.GET_GOERTZEL_BURDEN, optional: true).ConfigureAwait(false);
+        if (_config is not null && !burdenRead)
+        {
+            _config.BurdenResistanceOhms = null;
+            _config.BurdenCapacitanceNf = null;
+            _config.CtSecondaryInductanceMh = null;
+            _config.CtTurnsRatio = null;
+            _config.FrontEndAttenuation = null;
+            _config.GoertzelPhaseOffsetDeg = null;
+            _config.BurdenCompEnabled = null;
+        }
         if (_config is null) return false;
         _config.ReadbackComplete = allOk && !_disposed && ReferenceEquals(sessionPort, _port) && _port is { IsOpen: true };
         PublishConfiguration();
@@ -1150,9 +1206,40 @@ public sealed class SerialDeviceService : IDisposable
                     await SetAndReadAsync(Opcode.SET_CAPTURE_EDGE, [(byte)refEdge, (byte)zcdEdge], Opcode.GET_CAPTURE_EDGE,
                         () => _config?.ReferenceCaptureEdge == refEdge && _config?.ZcdCaptureEdge == zcdEdge).ConfigureAwait(false);
             }
+            if (patch.PhaseSource.HasValue && patch.PhaseSource != _config!.PhaseSource)
+                await SetAndReadAsync(Opcode.SET_PHASE_SOURCE, [(byte)patch.PhaseSource.Value], Opcode.GET_PHASE_SOURCE,
+                    () => _config?.PhaseSource == patch.PhaseSource).ConfigureAwait(false);
             if (patch.TrackingDirection.HasValue && patch.TrackingDirection != _config!.TrackingDirection)
                 await SetAndReadAsync(Opcode.SET_TRACKING_DIR, [(byte)patch.TrackingDirection.Value], Opcode.GET_TRACKING_DIR,
                     () => _config?.TrackingDirection == patch.TrackingDirection).ConfigureAwait(false);
+            if (patch.BurdenResistanceOhms.HasValue || patch.BurdenCapacitanceNf.HasValue ||
+                patch.CtSecondaryInductanceMh.HasValue || patch.CtTurnsRatio.HasValue ||
+                patch.FrontEndAttenuation.HasValue || patch.GoertzelPhaseOffsetDeg.HasValue ||
+                patch.BurdenCompEnabled.HasValue)
+            {
+                float rB    = (float)(patch.BurdenResistanceOhms    ?? _config!.BurdenResistanceOhms!.Value);
+                float cB    = (float)((patch.BurdenCapacitanceNf    ?? _config!.BurdenCapacitanceNf!.Value) * 1e-9);
+                float lS    = (float)((patch.CtSecondaryInductanceMh ?? _config!.CtSecondaryInductanceMh!.Value) * 1e-3);
+                float ctN   = (float)(patch.CtTurnsRatio            ?? _config!.CtTurnsRatio!.Value);
+                float atten = (float)(patch.FrontEndAttenuation     ?? _config!.FrontEndAttenuation!.Value);
+                float pOff  = (float)(patch.GoertzelPhaseOffsetDeg  ?? _config!.GoertzelPhaseOffsetDeg ?? 180.0);
+                int   compEn = patch.BurdenCompEnabled              ?? _config!.BurdenCompEnabled ?? 0;
+                byte[] buf = new byte[25];
+                BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(0, 4), rB);
+                BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(4, 4), cB);
+                BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(8, 4), lS);
+                BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(12, 4), ctN);
+                BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(16, 4), atten);
+                BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(20, 4), pOff);
+                buf[24] = compEn != 0 ? (byte)1 : (byte)0;
+                await SetAndReadAsync(Opcode.SET_GOERTZEL_BURDEN, buf, Opcode.GET_GOERTZEL_BURDEN,
+                    () => _config is not null &&
+                          _config.BurdenResistanceOhms.HasValue && SameFloat(_config.BurdenResistanceOhms.Value, rB) &&
+                          _config.CtTurnsRatio.HasValue && SameFloat(_config.CtTurnsRatio.Value, ctN) &&
+                          _config.FrontEndAttenuation.HasValue && SameFloat(_config.FrontEndAttenuation.Value, atten) &&
+                          (!_config.GoertzelPhaseOffsetDeg.HasValue || SameFloat(_config.GoertzelPhaseOffsetDeg.Value, pOff)) &&
+                          (!_config.BurdenCompEnabled.HasValue || _config.BurdenCompEnabled.Value == compEn)).ConfigureAwait(false);
+            }
 
             if (!await RefreshConfigurationCoreAsync().ConfigureAwait(false))
                 throw new InvalidOperationException("Settings were sent, but readback is incomplete. Read configuration before continuing.");
@@ -1213,6 +1300,24 @@ public sealed class SerialDeviceService : IDisposable
         Range(p.ReferenceCaptureEdge, 0, 2, nameof(p.ReferenceCaptureEdge));
         Range(p.ZcdCaptureEdge, 0, 2, nameof(p.ZcdCaptureEdge));
         Range(p.TrackingDirection, 0, 1, nameof(p.TrackingDirection));
+        Range(p.PhaseSource, 0, 1, nameof(p.PhaseSource));
+        if (p.PhaseSource.HasValue && !c.PhaseSource.HasValue)
+            throw new InvalidOperationException("Phase-source readback is unknown or unsupported (firmware too old).");
+        Range(p.BurdenResistanceOhms, 0.1, 1e6, nameof(p.BurdenResistanceOhms));
+        Range(p.BurdenCapacitanceNf, 0.0, 1e6, nameof(p.BurdenCapacitanceNf));
+        Range(p.CtSecondaryInductanceMh, 0.001, 1e5, nameof(p.CtSecondaryInductanceMh));
+        Range(p.CtTurnsRatio, 0.1, 1e5, nameof(p.CtTurnsRatio));
+        Range(p.FrontEndAttenuation, 0.001, 1.0, nameof(p.FrontEndAttenuation));
+        Range(p.GoertzelPhaseOffsetDeg, -360.0, 360.0, nameof(p.GoertzelPhaseOffsetDeg));
+        Range(p.BurdenCompEnabled, 0, 1, nameof(p.BurdenCompEnabled));
+        if ((p.BurdenResistanceOhms.HasValue || p.BurdenCapacitanceNf.HasValue ||
+             p.CtSecondaryInductanceMh.HasValue || p.CtTurnsRatio.HasValue ||
+             p.FrontEndAttenuation.HasValue || p.GoertzelPhaseOffsetDeg.HasValue ||
+             p.BurdenCompEnabled.HasValue) &&
+            (!c.BurdenResistanceOhms.HasValue || !c.BurdenCapacitanceNf.HasValue ||
+             !c.CtSecondaryInductanceMh.HasValue || !c.CtTurnsRatio.HasValue ||
+             !c.FrontEndAttenuation.HasValue))
+            throw new InvalidOperationException("Goertzel burden calibration readback is unknown or unsupported (firmware too old).");
         Range(p.DdsMinFreq, 1000, 500000, nameof(p.DdsMinFreq));
         Range(p.DdsMaxFreq, 1000, 500000, nameof(p.DdsMaxFreq));
         Range(p.DdsCenterFreq, 1000, 500000, nameof(p.DdsCenterFreq));
@@ -1273,6 +1378,10 @@ public sealed class SerialDeviceService : IDisposable
     /// <summary>Stop / abort firmware-driven Phase Response (Bode Plot) sweep.</summary>
     public void StopBodeSweep() =>
         SendBinary(Opcode.STOP_BODE_SWEEP, default);
+
+    /// <summary>Request an instantaneous ADC waveform snapshot (PC4 current & PA7 drive ref) from firmware.</summary>
+    public void TriggerAdcSnapshot() =>
+        SendBinary(Opcode.TRIGGER_ADC_SNAPSHOT, default);
 
     public void Dispose()
     {

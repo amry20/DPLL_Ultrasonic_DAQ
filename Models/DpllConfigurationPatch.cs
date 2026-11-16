@@ -27,6 +27,14 @@ public sealed class DpllConfigurationPatch
     public int? ReferenceCaptureEdge { get; set; }
     public int? ZcdCaptureEdge { get; set; }
     public int? TrackingDirection { get; set; }
+    public int? PhaseSource { get; set; }
+    public double? BurdenResistanceOhms { get; set; }
+    public double? BurdenCapacitanceNf { get; set; }
+    public double? CtSecondaryInductanceMh { get; set; }
+    public double? CtTurnsRatio { get; set; }
+    public double? FrontEndAttenuation { get; set; }
+    public double? GoertzelPhaseOffsetDeg { get; set; }
+    public int? BurdenCompEnabled { get; set; }
 
     /// <summary>Source whose Kp/Ki/Kd/MaxSlew the user read before editing.
     /// Required for gain edits; prevents a second client from changing the active bank underneath them.</summary>

@@ -94,6 +94,14 @@ const els = {
   trackingDirectionStatus: $('trackingDirectionStatus'),
   referenceCaptureEdgeInput: $('referenceCaptureEdgeInput'),
   zcdCaptureEdgeInput: $('zcdCaptureEdgeInput'),
+  phaseSourceInput: $('phaseSourceInput'),
+  burdenResistanceInput: $('burdenResistanceInput'),
+  burdenCapacitanceInput: $('burdenCapacitanceInput'),
+  ctInductanceInput: $('ctInductanceInput'),
+  ctTurnsInput: $('ctTurnsInput'),
+  frontEndAttenInput: $('frontEndAttenInput'),
+  goertzelPhaseOffsetInput: $('goertzelPhaseOffsetInput'),
+  burdenCompEnabledInput: $('burdenCompEnabledInput'),
   jumperModal: $('jumperModal'),
   modalTitleText: $('modalTitleText'),
   modalSourceText: $('modalSourceText'),
@@ -187,6 +195,16 @@ const els = {
   bodeChart: $('bodeChart'),
   bodeTable: $('bodeTable'),
   bodeTableBody: $('bodeTableBody'),
+  scopeCaptureBtn: $('scopeCaptureBtn'),
+  scopeContinuousCheck: $('scopeContinuousCheck'),
+  scopeDownloadImgBtn: $('scopeDownloadImgBtn'),
+  scopeDownloadCsvBtn: $('scopeDownloadCsvBtn'),
+  scopeVpkText: $('scopeVpkText'),
+  scopeVmidText: $('scopeVmidText'),
+  scopeVburdenText: $('scopeVburdenText'),
+  scopeFreqText: $('scopeFreqText'),
+  scopeClipBadge: $('scopeClipBadge'),
+  scopeChart: $('scopeChart'),
   log: $('log'),
   clearLogBtn: $('clearLogBtn'),
 };
@@ -207,6 +225,7 @@ function initSignalR() {
   connection.on('EepromActionResult', onEepromActionResult);
   connection.on('SonicationStatus', onSonicationStatus);
   connection.on('BodeSweepPoint', onBodeSweepPoint);
+  connection.on('AdcSnapshot', onAdcSnapshot);
 
   connection.onreconnecting(() => {
     log('warn', 'SignalR reconnecting…');
@@ -363,6 +382,14 @@ function onConfiguration(cfg) {
   els.referenceCaptureEdgeInput.value = cfg.ReferenceCaptureEdge == null ? '' : String(cfg.ReferenceCaptureEdge);
   els.zcdCaptureEdgeInput.value = cfg.ZcdCaptureEdge == null ? '' : String(cfg.ZcdCaptureEdge);
   els.trackingDirectionInput.value = cfg.TrackingDirection == null ? '' : String(cfg.TrackingDirection);
+  if (els.phaseSourceInput) els.phaseSourceInput.value = cfg.PhaseSource == null ? '' : String(cfg.PhaseSource);
+  if (els.burdenResistanceInput) els.burdenResistanceInput.value = cfg.BurdenResistanceOhms == null ? '' : fmt(cfg.BurdenResistanceOhms, 2);
+  if (els.burdenCapacitanceInput) els.burdenCapacitanceInput.value = cfg.BurdenCapacitanceNf == null ? '' : fmt(cfg.BurdenCapacitanceNf, 3);
+  if (els.ctInductanceInput) els.ctInductanceInput.value = cfg.CtSecondaryInductanceMh == null ? '' : fmt(cfg.CtSecondaryInductanceMh, 3);
+  if (els.ctTurnsInput) els.ctTurnsInput.value = cfg.CtTurnsRatio == null ? '' : fmt(cfg.CtTurnsRatio, 1);
+  if (els.frontEndAttenInput) els.frontEndAttenInput.value = cfg.FrontEndAttenuation == null ? '' : fmt(cfg.FrontEndAttenuation, 6);
+  if (els.goertzelPhaseOffsetInput) els.goertzelPhaseOffsetInput.value = cfg.GoertzelPhaseOffsetDeg == null ? '' : fmt(cfg.GoertzelPhaseOffsetDeg, 2);
+  if (els.burdenCompEnabledInput) els.burdenCompEnabledInput.value = cfg.BurdenCompEnabled == null ? '' : String(cfg.BurdenCompEnabled);
   els.trackingDirectionStatus.textContent = cfg.TrackingDirection == null
     ? 'Active direction: unknown / unsupported GET'
     : `Active direction: ${cfg.TrackingDirection === 1 ? 'Inverted' : 'Normal'}`;
@@ -629,6 +656,13 @@ function initCharts() {
       }
     }
     state.charts.bode = bodeEc;
+  }
+  const scopeDom = document.getElementById('scopeChart');
+  if (scopeDom) {
+    const scopeEc = echarts.init(scopeDom, null, { renderer: 'canvas', useDirtyRect: true });
+    scopeEc.setOption(makeScopeChartOption());
+    state.scopeEc = scopeEc;
+    state.charts.scope = scopeEc;
   }
   // resize all charts when window resizes
   window.addEventListener('resize', () => {
@@ -2336,6 +2370,335 @@ if (els.bodeApplyPointRamBtn) {
 }
 
 updateBodeCalcDisplay();
+
+// ---------------- ADC Waveform Oscilloscope ----------------
+function makeScopeChartOption() {
+  return {
+    animation: false,
+    backgroundColor: 'transparent',
+    grid: { top: 32, right: 24, bottom: 42, left: 56 },
+    legend: {
+      data: ['PC4 Current (CT Out)', 'PA7 Drive Reference'],
+      textStyle: { color: '#8b9bb0', fontSize: 11 },
+      top: 4,
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#121822',
+      borderColor: '#223042',
+      textStyle: { color: '#e6edf5', fontSize: 12 },
+      formatter: (params) => {
+        if (!params || !params.length) return '';
+        let s = `Time: <b>${params[0].axisValue} µs</b><br/>`;
+        for (const p of params) {
+          if (p.value !== null && p.value !== undefined) {
+            s += `<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${p.color};"></span>${p.seriesName}: <b>${Number(p.value).toFixed(3)} V</b><br/>`;
+          }
+        }
+        return s;
+      },
+    },
+    xAxis: {
+      type: 'category',
+      name: 'Time (µs)',
+      nameLocation: 'middle',
+      nameGap: 24,
+      nameTextStyle: { color: '#8b9bb0', fontSize: 11 },
+      data: [],
+      axisLine:  { lineStyle: { color: '#223042' } },
+      axisTick:  { lineStyle: { color: '#223042' } },
+      axisLabel: { color: '#8b9bb0', fontSize: 11 },
+      splitLine: { show: true, lineStyle: { color: '#1a2332', type: 'dashed' } },
+    },
+    yAxis: {
+      type: 'value',
+      min: 0.0,
+      max: 3.3,
+      name: 'Voltage (V)',
+      nameTextStyle: { color: '#8b9bb0', fontSize: 11 },
+      axisLine:  { show: true, lineStyle: { color: '#223042' } },
+      axisTick:  { show: false },
+      axisLabel: { color: '#8b9bb0', fontSize: 11, formatter: v => v.toFixed(1) + ' V' },
+      splitLine: { lineStyle: { color: '#1a2332', type: 'dashed' } },
+    },
+    series: [
+      {
+        name: 'PC4 Current (CT Out)',
+        type: 'line',
+        data: [],
+        symbol: 'none',
+        lineStyle: { color: '#06b6d4', width: 2.2 },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(6, 182, 212, 0.25)' },
+              { offset: 1, color: 'rgba(6, 182, 212, 0.00)' },
+            ],
+          },
+        },
+        markLine: {
+          symbol: 'none',
+          silent: true,
+          data: [
+            {
+              yAxis: 1.65,
+              lineStyle: { color: '#ef4444', type: 'dashed', width: 1.2 },
+              label: { position: 'insideEndTop', formatter: 'VREF 1.65V', color: '#ef4444', fontSize: 10 },
+            },
+          ],
+        },
+      },
+      {
+        name: 'PA7 Drive Reference',
+        type: 'line',
+        data: [],
+        symbol: 'none',
+        lineStyle: { color: '#f59e0b', width: 1.6, type: 'solid' },
+      },
+    ],
+  };
+}
+
+function onAdcSnapshot(raw) {
+  if (!raw) return;
+  // SignalR payload is PascalCase (naming policy = null); normalise to camelCase.
+  const snapshot = {
+    channel: raw.Channel ?? raw.channel,
+    sampleRateHz: raw.SampleRateHz ?? raw.sampleRateHz ?? 750000,
+    vRefVolts: raw.VRefVolts ?? raw.vRefVolts ?? 1.65,
+    frontEndAtten: raw.FrontEndAtten ?? raw.frontEndAtten ?? 0.333333,
+    vPeak: raw.VPeak ?? raw.vPeak,
+    vMid: raw.VMid ?? raw.vMid,
+    vMin: raw.VMin ?? raw.vMin,
+    vMax: raw.VMax ?? raw.vMax,
+    vBurdenPk: raw.VBurdenPk ?? raw.vBurdenPk,
+    driveFreqHz: raw.DriveFreqHz ?? raw.driveFreqHz,
+    rawSamples: raw.RawSamples ?? raw.rawSamples,
+    timeUs: raw.TimeUs ?? raw.timeUs,
+    voltageVolts: raw.VoltageVolts ?? raw.voltageVolts,
+  };
+  if (!state.scopeData) {
+    state.scopeData = { ch0: null, ch1: null };
+  }
+
+  if (snapshot.channel === 0) {
+    state.scopeData.ch0 = snapshot;
+
+    // Update UI chips
+    if (els.scopeVpkText) {
+      els.scopeVpkText.textContent = `${Number(snapshot.vPeak || 0).toFixed(2)} V (${(Number(snapshot.vPeak || 0) * 2).toFixed(2)} Vpp)`;
+    }
+    if (els.scopeVmidText) {
+      els.scopeVmidText.textContent = `${Number(snapshot.vMid || 0).toFixed(2)} V`;
+    }
+    if (els.scopeVburdenText) {
+      els.scopeVburdenText.textContent = `${Number(snapshot.vBurdenPk || 0).toFixed(2)} V pk`;
+    }
+    if (els.scopeFreqText) {
+      els.scopeFreqText.textContent = `${Number(snapshot.driveFreqHz || 0).toFixed(0)} Hz`;
+    }
+    if (els.scopeClipBadge) {
+      const isClipping = (snapshot.vMax >= 3.25 || snapshot.vMin <= 0.05);
+      els.scopeClipBadge.style.display = isClipping ? 'inline-block' : 'none';
+    }
+  } else if (snapshot.channel === 1) {
+    state.scopeData.ch1 = snapshot;
+  }
+
+  if (els.scopeDownloadImgBtn) els.scopeDownloadImgBtn.disabled = false;
+  if (els.scopeDownloadCsvBtn) els.scopeDownloadCsvBtn.disabled = false;
+
+  renderScopeChart();
+}
+
+function renderScopeChart() {
+  if (!state.scopeEc || !state.scopeData) return;
+  const ch0 = state.scopeData.ch0;
+  const ch1 = state.scopeData.ch1;
+  if (!ch0 && !ch1) return;
+
+  const base = ch0 || ch1;
+  const timeLabels = base.timeUs ? Array.from(base.timeUs).map(t => Number(t).toFixed(1)) : [];
+  const curData = ch0 && ch0.voltageVolts ? Array.from(ch0.voltageVolts) : [];
+  const refData = ch1 && ch1.voltageVolts ? Array.from(ch1.voltageVolts) : [];
+
+  state.scopeEc.setOption({
+    xAxis: { data: timeLabels },
+    series: [
+      { name: 'PC4 Current (CT Out)', data: curData },
+      { name: 'PA7 Drive Reference', data: refData },
+    ],
+  });
+}
+
+function triggerAdcSnapshot() {
+  if (!connection || connection.state !== signalR.HubConnectionState.Connected) {
+    log('warn', 'Cannot capture snapshot: not connected to controller.');
+    return;
+  }
+  connection.invoke('TriggerAdcSnapshot').catch(err => {
+    log('error', `TriggerAdcSnapshot failed: ${err}`);
+  });
+}
+
+function toggleContinuousScope() {
+  if (els.scopeContinuousCheck && els.scopeContinuousCheck.checked) {
+    if (state.scopeTimer) clearInterval(state.scopeTimer);
+    triggerAdcSnapshot();
+    state.scopeTimer = setInterval(() => {
+      triggerAdcSnapshot();
+    }, 500); // 2 Hz continuous refresh
+    log('info', '[Scope] Continuous 2 Hz waveform snapshot stream started.');
+  } else {
+    if (state.scopeTimer) {
+      clearInterval(state.scopeTimer);
+      state.scopeTimer = null;
+      log('info', '[Scope] Continuous waveform snapshot stopped.');
+    }
+  }
+}
+
+async function buildScopeSnapshotDataUrl() {
+  const ec = state.scopeEc || state.charts?.scope;
+  if (!ec || typeof ec.getDataURL !== 'function') {
+    throw new Error('Waveform chart is not available');
+  }
+  const rawDataUrl = ec.getDataURL({
+    type: 'png',
+    pixelRatio: 2,
+    backgroundColor: '#121822',
+  });
+
+  if (typeof Image === 'undefined') {
+    return rawDataUrl;
+  }
+
+  return await new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const headerHeight = 96;
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height + headerHeight;
+      const ctx = canvas.getContext?.('2d');
+      if (!ctx) {
+        resolve(rawDataUrl);
+        return;
+      }
+
+      ctx.fillStyle = '#121822';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#e6edf5';
+      ctx.font = 'bold 26px system-ui, -apple-system, Segoe UI, sans-serif';
+      ctx.fillText('ADC Waveform Snapshot — PC4 (CT Current) & PA7 (Drive Ref)', 28, 40);
+
+      const ch0 = state.scopeData?.ch0;
+      const vpkStr = ch0 ? `${Number(ch0.vPeak || 0).toFixed(2)} Vpk` : 'N/A';
+      const vmidStr = ch0 ? `${Number(ch0.vMid || 0).toFixed(2)} V` : 'N/A';
+      const vburStr = ch0 ? `${Number(ch0.vBurdenPk || 0).toFixed(2)} Vpk` : 'N/A';
+      const freqStr = ch0 ? `${Number(ch0.driveFreqHz || 0).toFixed(1)} Hz` : 'N/A';
+      ctx.fillStyle = '#8b9bb0';
+      ctx.font = '20px ui-monospace, SFMono-Regular, Consolas, monospace';
+      ctx.fillText(
+        `Drive: ${freqStr} · 750 kSPS · PC4 Peak: ${vpkStr} · Vmid: ${vmidStr} · Burden: ${vburStr}`,
+        28,
+        74
+      );
+
+      ctx.strokeStyle = '#223042';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(24, headerHeight - 8);
+      ctx.lineTo(canvas.width - 24, headerHeight - 8);
+      ctx.stroke();
+
+      ctx.drawImage(img, 0, headerHeight);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(rawDataUrl);
+    img.src = rawDataUrl;
+  });
+}
+
+async function onDownloadScopePng() {
+  if (!state.scopeData || (!state.scopeData.ch0 && !state.scopeData.ch1)) {
+    log('warn', 'No waveform snapshot data to export');
+    return;
+  }
+  try {
+    const dataUrl = await buildScopeSnapshotDataUrl();
+    const timestampStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `adc_waveform_snapshot_${timestampStr}.png`;
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    if (document.body) {
+      document.body.appendChild(a);
+      if (typeof a.click === 'function') a.click();
+      document.body.removeChild(a);
+    }
+    log('ok', `[Scope] Waveform PNG exported: ${filename}`);
+  } catch (err) {
+    log('error', `[Scope] Failed to export PNG: ${err.message || err}`);
+  }
+}
+
+function onDownloadScopeCsv() {
+  const ch0 = state.scopeData?.ch0;
+  const ch1 = state.scopeData?.ch1;
+  if (!ch0 && !ch1) {
+    log('warn', 'No waveform snapshot data to export');
+    return;
+  }
+  const base = ch0 || ch1;
+  const n = Math.max(
+    ch0?.voltageVolts?.length || 0,
+    ch1?.voltageVolts?.length || 0
+  );
+  const now = new Date();
+  const timestampStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = `adc_waveform_snapshot_${timestampStr}.csv`;
+
+  const lines = [
+    '# DPLL Ultrasonic ADC Waveform Snapshot',
+    `# Export Date: ${now.toISOString()}`,
+    `# Sample Rate: ${base.sampleRateHz || 750000} Hz`,
+    `# Drive Frequency: ${Number(base.driveFreqHz || 0).toFixed(2)} Hz`,
+    `# Front-End Atten: ${Number(base.frontEndAtten || 0.333333).toFixed(6)}`,
+    `# PC4 Peak: ${ch0 ? Number(ch0.vPeak || 0).toFixed(4) : ''} V | PC4 Vmid: ${ch0 ? Number(ch0.vMid || 0).toFixed(4) : ''} V | CT Burden Vpk: ${ch0 ? Number(ch0.vBurdenPk || 0).toFixed(4) : ''} V`,
+    'SampleIndex,Time_us,PC4_Current_Raw,PC4_Current_V,PA7_DriveRef_Raw,PA7_DriveRef_V',
+  ];
+
+  for (let i = 0; i < n; i++) {
+    const tUs = base.timeUs?.[i] != null ? Number(base.timeUs[i]).toFixed(4) : '';
+    const cRaw = ch0?.rawSamples?.[i] != null ? ch0.rawSamples[i] : '';
+    const cV = ch0?.voltageVolts?.[i] != null ? Number(ch0.voltageVolts[i]).toFixed(5) : '';
+    const rRaw = ch1?.rawSamples?.[i] != null ? ch1.rawSamples[i] : '';
+    const rV = ch1?.voltageVolts?.[i] != null ? Number(ch1.voltageVolts[i]).toFixed(5) : '';
+    lines.push(`${i},${tUs},${cRaw},${cV},${rRaw},${rV}`);
+  }
+
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  if (document.body) {
+    document.body.appendChild(a);
+    if (typeof a.click === 'function') a.click();
+    document.body.removeChild(a);
+  }
+  URL.revokeObjectURL(url);
+  log('ok', `[Scope] Waveform CSV exported: ${filename} (${n} samples)`);
+}
+
+if (els.scopeCaptureBtn) els.scopeCaptureBtn.addEventListener('click', triggerAdcSnapshot);
+if (els.scopeContinuousCheck) els.scopeContinuousCheck.addEventListener('change', toggleContinuousScope);
+if (els.scopeDownloadImgBtn) els.scopeDownloadImgBtn.addEventListener('click', onDownloadScopePng);
+if (els.scopeDownloadCsvBtn) els.scopeDownloadCsvBtn.addEventListener('click', onDownloadScopeCsv);
 
 // ---------------- Boot ----------------
 updateConfigControls();

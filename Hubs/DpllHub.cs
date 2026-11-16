@@ -64,6 +64,10 @@ public class DpllHub : Hub
         {
             Clients.Caller.SendAsync("SonicationStatus", s);
         }
+        if (_device.LatestAdcSnapshot is { } snap)
+        {
+            Clients.Caller.SendAsync("AdcSnapshot", snap);
+        }
         Clients.Caller.SendAsync("ConnectionState", (int)_device.State, _device.PortName);
         return base.OnConnectedAsync();
     }
@@ -131,4 +135,8 @@ public class DpllHub : Hub
     /// <summary>Stop / abort firmware-driven Phase Response (Bode Plot) sweep.</summary>
     public void StopBodeSweep() =>
         _device.StopBodeSweep();
+
+    /// <summary>Request an instantaneous raw ADC waveform snapshot.</summary>
+    public void TriggerAdcSnapshot() =>
+        _device.TriggerAdcSnapshot();
 }

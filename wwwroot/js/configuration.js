@@ -27,6 +27,14 @@
     ['ReferenceCaptureEdge', 'referenceCaptureEdgeInput', 0, 2, true, true],
     ['ZcdCaptureEdge', 'zcdCaptureEdgeInput', 0, 2, true, true],
     ['TrackingDirection', 'trackingDirectionInput', 0, 1, true, true],
+    ['PhaseSource', 'phaseSourceInput', 0, 1, true, true],
+    ['BurdenResistanceOhms', 'burdenResistanceInput', 0.1, 1000000, false, true],
+    ['BurdenCapacitanceNf', 'burdenCapacitanceInput', 0, 1000000, false, true],
+    ['CtSecondaryInductanceMh', 'ctInductanceInput', 0.001, 100000, false, true],
+    ['CtTurnsRatio', 'ctTurnsInput', 0.1, 100000, false, true],
+    ['FrontEndAttenuation', 'frontEndAttenInput', 0.001, 1.0, false, true],
+    ['GoertzelPhaseOffsetDeg', 'goertzelPhaseOffsetInput', -360, 360, false, true],
+    ['BurdenCompEnabled', 'burdenCompEnabledInput', 0, 1, true, true],
   ];
   const gainFields = ['Kp', 'Ki', 'Kd', 'MaxSlew'];
 

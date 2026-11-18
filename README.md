@@ -33,6 +33,22 @@ The connection badge shows `ONLINE · COM9` when the link is up. The port reconn
 
 ---
 
+## Publishing the Windows x64 application
+
+Publish the complete application using the Windows profile:
+
+```powershell
+dotnet publish -p:PublishProfile=Windows-x64
+```
+
+The output is written to `App/` and requires the .NET 10 ASP.NET Core runtime.
+Keep any local settings and measurements in `App/` backed up before publishing.
+Deploy the generated application DLL, `.deps.json`, and dependencies together.
+Do not replace individual publish files with files from a generic build output:
+the generic `System.IO.Ports.dll` is a fallback assembly, while the Windows
+profile selects the Windows implementation. Mixing them can cause
+`PlatformNotSupportedException` on Windows when enumerating COM ports.
+
 ## Configuration (`serial.json`)
 
 The serial port is configured in **`serial.json`** (in the project root), which is hot-reloaded: **edit and save the file while the app is running and it reconnects to the new port without a restart**.

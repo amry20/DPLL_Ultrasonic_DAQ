@@ -4,6 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Published files must not become inputs to the next build/publish. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);App\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

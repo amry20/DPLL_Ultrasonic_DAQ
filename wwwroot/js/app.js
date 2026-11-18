@@ -2269,7 +2269,8 @@ function onDownloadBodeCsv() {
     `# Pulse ON Duration: ${bodeState.pulseOnMs} ms | Step Rest Gap: ${bodeState.restGapMs} ms`,
     `# 0-Deg Resonance Crossing: ${bodeState.zeroCrossFreqHz !== null ? bodeState.zeroCrossFreqHz.toFixed(2) + ' Hz' : 'N/A'}`,
     `# Target Phase Crossing: ${bodeState.targetCrossFreqHz !== null ? bodeState.targetCrossFreqHz.toFixed(2) + ' Hz' : 'N/A'}`,
-    `Step,Target_Frequency_Hz,Measured_Frequency_Hz,Phase_Degrees,Phase_Ns,Accepted_Samples,Valid,Pulse_On_ms,Rest_Gap_ms,Timestamp`,
+    `# Current measurement: fundamental peak amplitude (mA)`,
+    `Step,Target_Frequency_Hz,Measured_Frequency_Hz,Phase_Degrees,Phase_Ns,Current_Peak_mA,Accepted_Samples,Valid,Pulse_On_ms,Rest_Gap_ms,Timestamp`,
   ];
 
   for (const r of bodeState.results) {
@@ -2279,6 +2280,7 @@ function onDownloadBodeCsv() {
       r.measured.toFixed(2),
       r.phaseDeg.toFixed(4),
       r.phaseNs.toFixed(2),
+      Number.isFinite(r.currentMa) ? r.currentMa.toFixed(3) : '',
       r.samples,
       r.valid ? 1 : 0,
       r.pulseOnMs,

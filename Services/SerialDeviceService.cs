@@ -734,7 +734,7 @@ public sealed class SerialDeviceService : IDisposable
         Opcode.GET_CAPTURE_EDGE => payload.Length == 2 && payload[0] <= 2 && payload[1] <= 2,
         Opcode.GET_TRACKING_DIR => payload.Length == 1 && payload[0] <= 1,
         Opcode.GET_PHASE_SOURCE => payload.Length == 1 && payload[0] <= 1,
-        Opcode.GET_GOERTZEL_BURDEN => payload.Length is 20 or 24,
+        Opcode.GET_GOERTZEL_BURDEN => payload.Length is 20 or 24 or 25,
         Opcode.GET_GENERATOR_SOURCE => payload.Length == 1 && payload[0] <= 2,
         Opcode.GET_DDS_MCO_CLOCK => payload.Length == 1 && payload[0] <= 6,
         Opcode.GET_SIGNAL_LOSS_BEHAVIOR => payload.Length == 1 && payload[0] <= 2,
